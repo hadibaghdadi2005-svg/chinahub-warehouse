@@ -448,7 +448,7 @@ const TABS = [
 const DEFAULTS = {
   whName:"ChinaHub Warehouse", whSub:"China → Lebanon · consolidation hub",
   currency:"USD", lbpRate:89500, freeDays:14, cnyPerUsd:7.1,
-  rateMode:"cbm", ratePerCbm:260, ratePerKg:4.5,
+  rateMode:"cbm", ratePerCbm:260, ratePerKg:4.5, longStayDays:90,
 };
 const FEED_MAX = 200, HIST_MAX = 25, SCANFEED_MAX = 14;
 
@@ -495,6 +495,29 @@ function fmtTime(ms){
 }
 function fmtDate(ms){ return ms ? new Date(ms).toLocaleDateString([], {day:"2-digit",month:"short",year:"2-digit"}) : "—"; }
 function daysSince(ms){ return ms ? Math.floor((now()-ms)/86400000) : null; }
+
+/* A shipment code carries the date it was raised: SH20260804234046 was raised
+   on 4 August 2026. That matters because a dashboard import stamps every
+   parcel's receivedAt with the moment of the import, so thousands of records
+   share one date and nothing can be aged from it. */
+function shipDate(parcel){
+  const m = String(parcel||"").match(/^[A-Z]{2}(\d{4})(\d{2})(\d{2})/);
+  if(!m) return 0;
+  const y = +m[1], mo = +m[2], d = +m[3];
+  if(mo < 1 || mo > 12 || d < 1 || d > 31) return 0;
+  const t = Date.UTC(y, mo-1, d);
+  // a code that parses into the future is a coincidence, not a date
+  return (t > now() || y < 2000) ? 0 : t;
+}
+
+/* How long a parcel has been with us, in days, or null when nothing says.
+   The shipment date wins where there is one; a parcel added here by scanning
+   has no shipment code yet and its own receivedAt is the honest answer. */
+function ageDays(it){
+  const t = shipDate(it && it.parcel) || Number(it && it.receivedAt) || 0;
+  return t ? Math.floor((now() - t) / 86400000) : null;
+}
+const ageLabel = it => { const d = ageDays(it); return d == null ? "unknown" : nf0.format(d) + " days"; };
 
 /** db path segments allow letters, digits and _ - . ~ : @ + only. */
 function docId(barcode){
@@ -616,17 +639,33 @@ const allItems = () => [...S.items.values()];
 /* Counts the whole warehouse by default, or just the items handed to it, so the
    same tiles can describe a filtered slice without a second set of totals. */
 function counts(list){
-  const c = { total:0, expected:0, received:0, shelved:0, released:0, delivered:0, unpaid:0, unpaidAmt:0, late:0 };
+  const c = { total:0, expected:0, received:0, shelved:0, released:0, delivered:0,
+              unpaid:0, unpaidAmt:0, late:0, long:0, longAmt:0, longOwed:0 };
   for(const it of (list || S.items.values())){
     c.total++; c[it.status] = (c[it.status]||0) + 1;
     if(!it.paid && it.status!=="expected"){ c.unpaid++; c.unpaidAmt += Number(it.cost)||0; }
     if(isLate(it)) c.late++;
+    if(isLongStay(it)){
+      c.long++;
+      c.longAmt += Number(it.cost)||0;
+      if(!it.paid) c.longOwed += Number(it.cost)||0;
+    }
   }
   return c;
 }
+/* Still in the building: on a shelf, or in the shipping department. */
+const stillHere = it => it.status === "shelved" || it.status === "received";
+
+/* Sitting far longer than free storage — the pile worth acting on. */
+function isLongStay(it){
+  if(!stillHere(it)) return false;
+  const d = ageDays(it);
+  return d != null && d >= (Number(S.cfg.longStayDays) || 90);
+}
+
 function isLate(it){
-  if(it.status!=="shelved" && it.status!=="received") return false;
-  const d = daysSince(it.receivedAt);
+  if(!stillHere(it)) return false;
+  const d = ageDays(it);
   return d != null && d > (Number(S.cfg.freeDays)||0);
 }
 function zoneCount(code){
@@ -684,6 +723,7 @@ function matchesFilters(it, skip){
     if(f.paid === "no"   && (it.paid || it.status === "expected")) return false;
     if(f.paid === "yes"  && !it.paid) return false;
     if(f.paid === "late" && !isLate(it)) return false;
+    if(f.paid === "long" && !isLongStay(it)) return false;
   }
   if(q){
     const hay = [it.barcode,it.name,it.itemId,it.parcel,it.customer,it.clientId,it.phone,
@@ -1174,6 +1214,7 @@ function vStock(v){
       // the money tiles now stack on top of a status rather than replacing it
       if(!k)                S.filters = {...cur, status:"", paid:""};
       else if(k==="late")   S.filters = {...cur, paid: cur.paid==="late" ? "" : "late"};
+      else if(k==="long")   S.filters = {...cur, paid: cur.paid==="long" ? "" : "long"};
       else if(k==="unpaid") S.filters = {...cur, paid: cur.paid==="no"   ? "" : "no"};
       else                  S.filters = {...cur, status: cur.status===k ? "" : k};
       render();
@@ -1197,6 +1238,8 @@ function vStock(v){
     tile("delivered","Delivered", nf0.format(st.delivered), "handed over", f.status==="delivered"),
     tile("unpaid","Unpaid", money(pd.unpaidAmt), pd.unpaid+" item"+(pd.unpaid===1?"":"s"), f.paid==="no"),
     tile("late","Over free days", nf0.format(pd.late), "past "+S.cfg.freeDays+" days", f.paid==="late"),
+    tile("long","Here too long", nf0.format(pd.long),
+         (Number(S.cfg.longStayDays)||90) + "+ days · " + money(pd.longOwed) + " unpaid", f.paid==="long"),
   );
   v.append(tiles);
 
@@ -1237,6 +1280,7 @@ function filterLabel(){
   if(f.paid === "no")   bits.push("unpaid only");
   if(f.paid === "yes")  bits.push("paid only");
   if(f.paid === "late") bits.push("over free days");
+  if(f.paid === "long") bits.push("here over " + (Number(S.cfg.longStayDays)||90) + " days");
   if(f.parcel) bits.push("shipment " + f.parcel);
   if(f.q.trim()) bits.push("matching “" + f.q.trim() + "”");
   return bits.length ? bits.join(" · ") : "the whole warehouse";
@@ -1290,7 +1334,9 @@ function filterBar(){
   wrap.append(zs);
 
   const ps = el("select","mini");
-  ps.append(new Option("Any payment",""), new Option("Unpaid only","no"), new Option("Paid only","yes"), new Option("Over free days","late"));
+  ps.append(new Option("Any payment",""), new Option("Unpaid only","no"), new Option("Paid only","yes"),
+            new Option("Over free days","late"),
+            new Option("Here over " + (Number(S.cfg.longStayDays)||90) + " days","long"));
   ps.value = S.filters.paid;
   ps.setAttribute("aria-label","Filter by payment");
   ps.addEventListener("change", () => { S.filters.paid=ps.value; render(); });
@@ -1935,6 +1981,7 @@ function vSetup(v){
   fld("whName","Warehouse name", S.cfg.whName, DEFAULTS.whName);
   fld("whSub","Subtitle", S.cfg.whSub, DEFAULTS.whSub);
   fld("freeDays","Free storage days", S.cfg.freeDays, "14", "number");
+  fld("longStayDays","“Here too long” after (days)", S.cfg.longStayDays, "90", "number");
   fld("lbpRate","USD → LL rate", S.cfg.lbpRate, "89500", "number");
   fld("cnyPerUsd","Yuan per 1 USD (￥)", S.cfg.cnyPerUsd, "7.1", "number");
   const rw = el("div"); rw.append(labelFor("s_rateMode","Work out charge from"));
@@ -1951,6 +1998,7 @@ function vSetup(v){
       await saveCfg({
         whName:f.whName.value.trim()||DEFAULTS.whName, whSub:f.whSub.value.trim()||DEFAULTS.whSub,
         freeDays:+f.freeDays.value||0, lbpRate:+f.lbpRate.value||0,
+        longStayDays:+f.longStayDays.value||DEFAULTS.longStayDays,
         cnyPerUsd:+f.cnyPerUsd.value||0, rateMode:f.rateMode.value,
         ratePerCbm:+f.ratePerCbm.value||0, ratePerKg:+f.ratePerKg.value||0,
       });
@@ -2515,7 +2563,7 @@ function itemsToCsv(items){
     lines.push(cols.map(c => {
       if(c==="status") return csvCell(STATUS[it.status]?.label || it.status);
       if(c==="paid") return csvCell(it.paid ? "Yes" : "No");
-      if(c==="daysHeld"){ const d=daysSince(it.receivedAt); return csvCell(d==null?"":d); }
+      if(c==="daysHeld"){ const d=ageDays(it); return csvCell(d==null?"":d); }
       if(/At$/.test(c)) return csvCell(it[c] ? new Date(it[c]).toISOString().slice(0,10) : "");
       return csvCell(it[c]);
     }).join(","));
@@ -2567,7 +2615,8 @@ function openDrawer(id){
   dt.append(el("span",null, it.name || "No name recorded"));
   const chips = el("div","row"); chips.style.marginTop="7px";
   chips.append(statusChip(it), payChip(it));
-  if(isLate(it)) chips.append(el("span","chip late","over "+S.cfg.freeDays+" free days"));
+  if(isLongStay(it)) chips.append(el("span","chip late","here " + ageLabel(it)));
+  else if(isLate(it)) chips.append(el("span","chip late","over "+S.cfg.freeDays+" free days"));
   if(it.demo) chips.append(el("span","chip ghost","example row"));
   dt.append(chips);
   h.append(dt);
@@ -2602,8 +2651,14 @@ function openDrawer(id){
   if(it.shelvedAt)   kv("Shelved", fmtDate(it.shelvedAt));
   if(it.releasedAt)  kv("Released", fmtDate(it.releasedAt));
   if(it.deliveredAt) kv("Delivered", fmtDate(it.deliveredAt));
-  const held = daysSince(it.receivedAt);
-  if(held!=null && it.status!=="expected") kv("Days held", held + (isLate(it) ? "  (over free days)" : ""));
+  const held = ageDays(it);
+  if(held != null && it.status !== "expected"){
+    const sd = shipDate(it.parcel);
+    kv("Days held", nf0.format(held) +
+      (isLongStay(it) ? "  (here too long)" : isLate(it) ? "  (over free days)" : "") +
+      // say where the number came from, since the two sources mean different things
+      (sd ? "  · from the shipment date, " + fmtDate(sd) : "  · since it was recorded here"));
+  }
   if(it.notes) kv("Notes", it.notes);
   body.append(dl);
 

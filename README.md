@@ -154,6 +154,12 @@ Nothing in the dashboard catches this. Only a scan does.
 
 ## Finding parcels that have sat too long
 
+The app has this built in: the **Here too long** tile on the Stock tab, and
+*Here over 90 days* in the payment filter. The threshold is
+**Setup → “Here too long” after (days)**.
+
+For a one-off report, or to try several thresholds at once:
+
 ```bash
 node scripts/long-stay.js --records <dir> --days 90 --out long-stay.csv
 ```
