@@ -376,6 +376,15 @@ select.mini,input.mini{padding:6px 9px;border:1px solid var(--line);border-radiu
 .mstrip .mv{font-size:16.5px;font-weight:620;font-variant-numeric:tabular-nums;letter-spacing:-.015em}
 .mstrip .mv.owed{color:var(--danger)}
 .mstrip .mnote{flex:1 1 100%;font-size:11.5px;color:var(--fg-dim)}
+.lanetbl{display:grid;gap:7px;margin-top:14px}
+.lanehd,.lanerow{display:grid;grid-template-columns:1.1fr 1.2fr .95fr .7fr auto;gap:7px;align-items:center}
+.lanehd{font-size:10.5px;font-weight:600;letter-spacing:.055em;text-transform:uppercase;color:var(--fg-faint)}
+.lanerow .inp{padding:7px 9px;font-size:13px}
+.laneno{font-size:11.5px;color:var(--fg-dim);padding:2px 0}
+@media (max-width:739px){
+  .lanehd{display:none}
+  .lanerow{grid-template-columns:1fr 1fr;gap:6px;padding:9px;border:1px solid var(--line);border-radius:var(--r)}
+}
 .dropzone{border:1.5px dashed var(--line-strong);border-radius:var(--r-sm);padding:18px;text-align:center;font-size:13px;color:var(--fg-dim)}
 .dropzone.hot{border-color:var(--primary);background:var(--primary-wash);color:var(--primary)}
 .maplist{display:grid;gap:7px;grid-template-columns:repeat(auto-fit,minmax(168px,1fr))}
@@ -449,6 +458,16 @@ const DEFAULTS = {
   whName:"ChinaHub Warehouse", whSub:"China → Lebanon · consolidation hub",
   currency:"USD", lbpRate:89500, freeDays:14, cnyPerUsd:7.1,
   rateMode:"cbm", ratePerCbm:260, ratePerKg:4.5, longStayDays:90,
+  /* Freight costs a different amount per lane, so each one carries its own
+     price. `match` is looked for in a parcel's route and origin, and the
+     longest match wins, so "Air Cargo Hk" beats the broader "Air Cargo" and
+     the order of this list does not matter. A price of 0 means not set yet. */
+  lanes:[
+    { label:"Air · Hong Kong", match:"Air Cargo Hk", basis:"kg",  price:0 },
+    { label:"Air · Guangzhou", match:"Air Cargo LB", basis:"kg",  price:0 },
+    { label:"Air · other",     match:"Air Cargo",    basis:"kg",  price:0 },
+    { label:"Sea",             match:"Sea Cargo",    basis:"cbm", price:0 },
+  ],
 };
 const FEED_MAX = 200, HIST_MAX = 25, SCANFEED_MAX = 14;
 
@@ -470,6 +489,7 @@ const S = {
   importStatus:"received", importZone:"", showAll:false, showAllClients:false,
   seed:null, seedPending:0, seedBusy:false, seedErr:"",
   ups:null, upPending:0, upBusy:false,
+  lanesDraft:null, laneEls:[],
 };
 
 /* ============================== helpers ============================== */
@@ -759,7 +779,50 @@ function filtered(){
   });
   return out;
 }
+/* Lane prices are edited as a draft, so adding or removing a row does not
+   discard what has been typed into the others. */
+function laneRows(){
+  if(!Array.isArray(S.lanesDraft))
+    S.lanesDraft = (Array.isArray(S.cfg.lanes) ? S.cfg.lanes : DEFAULTS.lanes).map(L => ({...L}));
+  return S.lanesDraft;
+}
+function readLaneInputs(){
+  for(const r of (S.laneEls || [])){
+    r.lane.label = r.label.value.trim();
+    r.lane.match = r.match.value.trim();
+    r.lane.basis = r.basis.value === "cbm" ? "cbm" : "kg";
+    r.lane.price = +r.price.value || 0;
+  }
+}
+
+/* The priced lane a parcel belongs to, by what its route and origin say.
+   Longest match wins so a specific lane beats a general one; a lane with no
+   price set is ignored, which is what lets them be filled in one at a time. */
+function laneFor(it){
+  const hay = ((it && it.route) || "") + " " + ((it && it.origin) || "");
+  const h = hay.toLowerCase();
+  let best = null;
+  for(const L of (S.cfg.lanes || [])){
+    const m = String(L.match || "").trim().toLowerCase();
+    if(!m || !(Number(L.price) > 0)) continue;
+    if(!h.includes(m)) continue;
+    if(!best || m.length > String(best.match).trim().length) best = L;
+  }
+  return best;
+}
+
+/* What a lane charges for this parcel, or null when no lane applies. */
+function laneCost(it){
+  const L = laneFor(it);
+  if(!L) return null;
+  const qty = L.basis === "cbm" ? (Number(it.cbm)||0) : (Number(it.weightKg)||0);
+  if(!qty) return null;
+  return +(qty * Number(L.price)).toFixed(2);
+}
+
 function calcCost(it){
+  const byLane = laneCost(it);
+  if(byLane != null) return byLane;
   const m = S.cfg.rateMode;
   if(m==="cbm") return +( (Number(it.cbm)||0)  * (Number(S.cfg.ratePerCbm)||0) ).toFixed(2);
   if(m==="kg")  return +( (Number(it.weightKg)||0) * (Number(S.cfg.ratePerKg)||0) ).toFixed(2);
@@ -1155,8 +1218,11 @@ function quickAdd(seed){
   calc.addEventListener("click", () => {
     const tmp = { cbm:+f.cbm.value||0, weightKg:+f.weightKg.value||0 };
     const vv = calcCost(tmp);
-    if(S.cfg.rateMode==="manual"){ toast("Set a rate per CBM or per kg in Setup first."); return; }
-    f.cost.value = vv; toast("Charge set from your "+(S.cfg.rateMode==="cbm"?"CBM":"kg")+" rate.");
+    const lane = laneFor(tmp);
+    if(!lane && S.cfg.rateMode==="manual"){ toast("Set a lane price, or a CBM or kg rate, in Setup first."); return; }
+    f.cost.value = vv;
+    toast(lane ? "Charge set from the " + (lane.label||lane.match) + " lane."
+               : "Charge set from your "+(S.cfg.rateMode==="cbm"?"CBM":"kg")+" rate.");
   });
   act.append(calc);
   c.append(act);
@@ -1988,9 +2054,70 @@ function vSetup(v){
   const rs = el("select","inp"); rs.id="s_rateMode";
   rs.append(new Option("Volume — per CBM","cbm"), new Option("Weight — per kg","kg"), new Option("Enter by hand","manual"));
   rs.value = S.cfg.rateMode; f.rateMode=rs; rw.append(rs); g.append(rw);
-  fld("ratePerCbm","Rate per CBM (USD)", S.cfg.ratePerCbm, "260", "number");
-  fld("ratePerKg","Rate per kg (USD)", S.cfg.ratePerKg, "4.5", "number");
+  fld("ratePerCbm","Fallback rate per CBM (USD)", S.cfg.ratePerCbm, "260", "number");
+  fld("ratePerKg","Fallback rate per kg (USD)", S.cfg.ratePerKg, "4.5", "number");
   sc.append(g);
+
+  /* ---- lane prices ---- */
+  const lh = el("div","hr-t"); lh.append(el("span","sect-t","Price per lane")); sc.append(lh);
+  const lp = el("p"); lp.style.cssText = "margin:8px 0 0;font-size:13px;color:var(--fg-dim)";
+  lp.textContent = "Each lane can carry its own price. A parcel is matched on what its route " +
+    "says, and the most specific match wins — so “Air Cargo Hk” beats “Air Cargo”. Leave a " +
+    "price at 0 and that lane is ignored, falling back to the rates above.";
+  sc.append(lp);
+
+  const tbl = el("div","lanetbl");
+  const hd = el("div","lanehd");
+  ["Lane","Route contains","Priced by","USD","" ].forEach(t => hd.append(el("div",null,t)));
+  tbl.append(hd);
+
+  S.laneEls = [];
+  const lanes = laneRows();
+  lanes.forEach((L, i) => {
+    const row = el("div","lanerow");
+    const mk = (val, ph, type) => { const i2 = el("input","inp"); i2.value = val ?? "";
+      i2.placeholder = ph || ""; if(type){ i2.type = type; i2.step = "any"; i2.min = "0"; }
+      row.append(i2); return i2; };
+    const label = mk(L.label, "name it");
+    const match = mk(L.match, "Air Cargo Hk");
+    const bs = el("select","inp");
+    bs.append(new Option("per kg","kg"), new Option("per CBM","cbm"));
+    bs.value = L.basis === "cbm" ? "cbm" : "kg";
+    row.append(bs);
+    const price = mk(L.price, "0", "number");
+    const del = el("button","btn sm","Remove"); del.type = "button"; del.disabled = !writable();
+    del.addEventListener("click", () => { readLaneInputs(); S.lanesDraft.splice(i,1); render(); });
+    row.append(del);
+    tbl.append(row);
+    S.laneEls.push({ lane:L, label, match, basis:bs, price });
+  });
+  sc.append(tbl);
+
+  /* how many parcels each lane would actually price, so a typo is obvious */
+  const hit = lanes.map(() => 0);
+  let unmatched = 0;
+  for(const it of S.items.values()){
+    const hay = ((it.route||"") + " " + (it.origin||"")).toLowerCase();
+    let bi = -1, bl = -1;
+    lanes.forEach((L, i) => { const m = String(L.match||"").trim().toLowerCase();
+      if(m && hay.includes(m) && m.length > bl){ bl = m.length; bi = i; } });
+    if(bi < 0) unmatched++; else hit[bi]++;
+  }
+  const note = el("div","laneno");
+  note.textContent = lanes.map((L,i) => (L.label || L.match || "lane " + (i+1)) +
+    " " + nf0.format(hit[i])).join("  ·  ") +
+    (unmatched ? "  ·  no lane " + nf0.format(unmatched) : "");
+  sc.append(note);
+
+  const addRow = el("div","row"); addRow.style.marginTop = "9px";
+  const add = el("button","btn sm","Add a lane"); add.type = "button"; add.disabled = !writable();
+  add.addEventListener("click", () => {
+    readLaneInputs();
+    S.lanesDraft.push({ label:"", match:"", basis:"kg", price:0 });
+    render();
+  });
+  addRow.append(add);
+  sc.append(addRow);
   const sa = el("div","row"); sa.style.marginTop="12px";
   const sv = el("button","btn pri","Save settings"); sv.type="button"; sv.disabled=!writable();
   sv.addEventListener("click", async () => {
@@ -2001,7 +2128,9 @@ function vSetup(v){
         longStayDays:+f.longStayDays.value||DEFAULTS.longStayDays,
         cnyPerUsd:+f.cnyPerUsd.value||0, rateMode:f.rateMode.value,
         ratePerCbm:+f.ratePerCbm.value||0, ratePerKg:+f.ratePerKg.value||0,
+        lanes: (readLaneInputs(), S.lanesDraft.filter(L => L.match || L.label)),
       });
+      S.lanesDraft = null;      // reload the editor from what was saved
       toast("Settings saved."); render();
     }catch(_){}
   });
@@ -2017,6 +2146,18 @@ function vSetup(v){
   if(withCny.length)
     sa.append(el("span","sub2", nf0.format(withCny.length)+" items carry an original ￥ amount"));
   sc.append(sa);
+
+  // parcels with no ￥ amount can only be priced from the lane rates
+  const byLane = allItems().filter(it => laneCost(it) != null);
+  const sb = el("div","row"); sb.style.marginTop = "9px";
+  const pl = el("button","btn","Price from lane rates"); pl.type = "button";
+  pl.disabled = !writable() || !byLane.length;
+  pl.addEventListener("click", askLanePrice);
+  sb.append(pl);
+  sb.append(el("span","sub2", byLane.length
+    ? nf0.format(byLane.length) + " items fall in a priced lane"
+    : "set a lane price in Setup first"));
+  sc.append(sb);
   v.append(sc);
 
   // --- import
@@ -2076,6 +2217,63 @@ function vSetup(v){
     "This system is separate from your company dashboard. Use Import below to bring a list across; nothing syncs by itself.",
   ].forEach(t => { const d=el("div"); d.textContent = "· " + t; ul.append(d); });
   ac.append(ul); v.append(ac);
+}
+
+/* Pricing from the lane rates. Unlike the ￥ rebuild this can reach parcels
+   that were never billed at all, which is the whole point for goods still on
+   the way: they arrive with a weight and a route but no amount. */
+function askLanePrice(){
+  const todo = allItems().filter(it => laneCost(it) != null);
+  if(!todo.length){ toast("No items fall in a lane that has a price.","bad"); return; }
+  const before = todo.reduce((s,i) => s + (Number(i.cost)||0), 0);
+  const after  = todo.reduce((s,i) => s + laneCost(i), 0);
+  const unbilled = todo.filter(it => !(Number(it.cost) > 0)).length;
+  const byLane = new Map();
+  for(const it of todo){ const L = laneFor(it); const k = L.label || L.match;
+    byLane.set(k, (byLane.get(k)||0) + 1); }
+  askConfirm(
+    "Price " + nf0.format(todo.length) + " parcels from the lane rates?",
+    [...byLane.entries()].map(([k,v]) => nf0.format(v) + " on " + k).join(", ") + ". " +
+    "The total goes from " + money(before) + " to " + money(after) + ". " +
+    (unbilled ? nf0.format(unbilled) + " of them have no charge at all yet. " : "") +
+    "This replaces the charge on every one of them, including any you typed by hand. " +
+    "Parcels outside a priced lane are left alone.",
+    "Price them", runLanePrice);
+}
+
+async function runLanePrice(){
+  const todo = allItems().filter(it => laneCost(it) != null);
+  if(!todo.length || !S.db) return;
+  const prog = openProgress(todo.length, "Pricing from lane rates");
+  let done = 0, failed = 0, firstErr = "", idx = 0;
+  const t = now();
+  const worker = async () => {
+    while(idx < todo.length){
+      const it = todo[idx++];
+      const b = {...it}; delete b.id;
+      b.cost = laneCost(it);
+      b.currency = "USD";
+      b.updatedAt = t;
+      b.updatedBy = S.meId || "";
+      try{ await S.db.doc("items/" + it.id).set(b); }
+      catch(e){
+        failed++;
+        if(!firstErr) firstErr = (e && e.code) || "error";
+        if(failed > 25 || firstErr === "quota_exceeded") idx = todo.length;
+      }
+      done++;
+      if(done % 20 === 0 || done === todo.length) prog.set(done);
+    }
+  };
+  await Promise.all(Array.from({ length:6 }, worker));
+  prog.close();
+  const ok = done - failed;
+  if(ok) pushFeed({ t:now(), by:S.meId||"", bc:"Priced from lane rates",
+                    nm:nf0.format(ok) + " parcels repriced", from:"", to:"", loc:"" });
+  toast(failed
+    ? nf0.format(ok) + " priced, " + failed + " failed (" + firstErr + ")."
+    : nf0.format(ok) + " parcels priced from their lane.", failed ? "bad" : null);
+  render();
 }
 
 function askRecalc(){
@@ -2644,6 +2842,13 @@ function openDrawer(id){
   kv("Volume", (Number(it.cbm)||0) ? nf3.format(it.cbm)+" CBM" : "—");
   if(it.dims) kv("Box size", it.dims);
   kv("Charge", (Number(it.cost)||0) ? money(it.cost)+"  ·  "+lbp(it.cost) : "—");
+  const lane = laneFor(it);
+  if(lane){
+    const qty = lane.basis === "cbm" ? (Number(it.cbm)||0) : (Number(it.weightKg)||0);
+    const unit = lane.basis === "cbm" ? " m³" : " kg";
+    kv("Lane", (lane.label || lane.match) + "  ·  " + money(lane.price) + " per" + unit +
+       (qty ? "  ×  " + qty + unit + "  =  " + money(laneCost(it)) : "  (no " + unit.trim() + " recorded)"));
+  }
   if(Number(it.cny)||0) kv("Dashboard amount", "￥" + nf2.format(it.cny));
   if(it.payMethod) kv("Payment method", it.payMethod);
   if(Number(it.declared)||0) kv("Declared value", nf2.format(it.declared));
@@ -2793,8 +2998,12 @@ function editItem(id){
 
   openModal("Edit "+it.barcode, body, [
     { label:"Work out charge", cls:"btn sm", fn: () => {
-      if(S.cfg.rateMode==="manual"){ toast("Set a CBM or kg rate in Setup first."); return; }
-      f.cost.value = calcCost({ cbm:+f.cbm.value||0, weightKg:+f.weightKg.value||0 });
+      // the parcel's own route decides its lane, so pass it through
+      const tmp = { cbm:+f.cbm.value||0, weightKg:+f.weightKg.value||0,
+                    route:it.route, origin:it.origin };
+      if(!laneFor(tmp) && S.cfg.rateMode==="manual"){
+        toast("Set a lane price, or a CBM or kg rate, in Setup first."); return; }
+      f.cost.value = calcCost(tmp);
     }},
     { label:"Cancel", cls:"btn", fn:closeModal },
     { label:"Save", cls:"btn pri", fn: async () => {
