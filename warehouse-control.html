@@ -2905,14 +2905,19 @@ function seedCard(){
   const b = el("div","banner");
   b.append(el("b",null, nf0.format(S.seedPending) + " item" + (S.seedPending===1?"":"s") +
                         " from your dashboard export are ready to load."));
-  // a bundle may already carry locations, so say what is actually in this one
+  // a bundle carries its own statuses and locations, so say what is in this one
   const pend = S.seed ? S.seed.filter(d => !S.items.has(d._id)) : [];
   const located = pend.filter(d => d.status === "shelved" && d.shelf).length;
-  b.append(el("span",null, located
-    ? " " + nf0.format(located) + " of them were found on a shelf by the floor scan and go in at" +
-      " that location; the rest go in as in the warehouse. Barcodes already here are left untouched."
-    : " They go in as received in the shipping department, with charges converted from ￥." +
-      " Barcodes already here are left untouched."));
+  const coming  = pend.filter(d => d.status === "expected").length;
+  b.append(el("span",null,
+    coming === pend.length
+      ? " They go in as not here yet — still on the way from China, so nothing to put on a shelf." +
+        " Scan one when it arrives and it moves itself into the warehouse."
+      : located
+        ? " " + nf0.format(located) + " of them were found on a shelf by the floor scan and go in at" +
+          " that location; the rest go in as in the warehouse. Barcodes already here are left untouched."
+        : " They go in as received in the shipping department, with charges converted from ￥." +
+          " Barcodes already here are left untouched."));
   const go = el("button","btn sm pri", S.seedBusy ? "Loading…" : "Load now");
   go.type = "button";
   go.disabled = S.seedBusy;
@@ -2949,8 +2954,16 @@ async function runSeed(){
   S.seedBusy = false;
 
   const ok = done - failed;
+  // log what they actually went in as, not an assumed status
+  const went = {};
+  for(const d of todo) went[d.status || "received"] = (went[d.status||"received"]||0) + 1;
+  const only = Object.keys(went).length === 1 ? Object.keys(went)[0] : "";
   if(ok) pushFeed({ t:now(), by:S.meId||"", bc:"Dashboard import",
-                    nm:nf0.format(ok) + " items loaded", from:"", to:"received", loc:"SHIP" });
+                    nm:nf0.format(ok) + " items loaded" +
+                       (only ? "" : " (" + Object.entries(went)
+                         .map(([k,v]) => nf0.format(v) + " " + (STATUS[k] ? STATUS[k].label.toLowerCase() : k))
+                         .join(", ") + ")"),
+                    from:"", to:only || "", loc:"" });
   toast(failed
     ? nf0.format(ok) + " loaded, " + failed + " failed (" + firstErr + ")."
     : nf0.format(ok) + " items loaded into the warehouse.", failed ? "bad" : null);
