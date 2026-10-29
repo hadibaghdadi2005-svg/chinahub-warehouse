@@ -18,6 +18,7 @@ because its Received list and the warehouse floor do not always agree.
 | `scripts/xlsx.js` | Reader for the dashboard's `.xlsx` exports. No dependencies. |
 | `scripts/scan.js` | Shared pieces: scan files, the rack layout, shelf-label checks, document ids. |
 | `scripts/reconcile.js` | Compares a floor scan against an export and writes the discrepancy lists. |
+| `scripts/long-stay.js` | Finds parcels that have been sitting too long, aged from the shipment code. |
 
 **No customer data is in this repository, deliberately.** See
 [Why the data is not here](#why-the-data-is-not-here).
@@ -150,6 +151,24 @@ one of them on the shelf since August.
 Nothing in the dashboard catches this. Only a scan does.
 
 ---
+
+## Finding parcels that have sat too long
+
+```bash
+node scripts/long-stay.js --records <dir> --days 90 --out long-stay.csv
+```
+
+`--records` is a directory of one-JSON-per-parcel records exported from the
+app's database.
+
+**Age cannot come from the app.** Every parcel's `receivedAt` is the moment the
+data was imported, not when the goods arrived, so it is the same value on
+thousands of records. The real date is inside the shipment code: `SH20260804…`
+was raised on 4 August 2026. Parcels whose code carries no date — new arrivals
+still identified by their order number — are reported separately rather than
+assumed to be new.
+
+Parcels already out for delivery or delivered are excluded.
 
 ## Charges
 
