@@ -3187,7 +3187,10 @@ async function runSeed(){
    already matches the record is skipped, which makes a re-run after an
    interrupted load cost only what is left.
 
-   Entry shape: { _id, shelf?, zone?, status?, label?, note? } */
+   Entry shape: { _id, shelf?, zone?, status?, set?, label?, note? }
+   `set` carries any other fields to write, already merged against what the
+   record holds, so a refreshed export can be applied without the field-by-
+   field rules having to live in two places. */
 async function loadUpdates(){
   for(const u of ["updates.json", "./updates.json", "/updates.json"]){
     try{
@@ -3196,7 +3199,8 @@ async function loadUpdates(){
       const arr = await r.json();
       if(!Array.isArray(arr) || !arr.length) continue;
       S.ups = arr.filter(d => d && d._id &&
-        (d.shelf !== undefined || d.zone !== undefined || d.status));
+        (d.shelf !== undefined || d.zone !== undefined || d.status ||
+         (d.set && typeof d.set === "object")));
       recountUps();
       render();
       return;
@@ -3213,6 +3217,8 @@ function upTodo(){
     if(d.shelf  !== undefined && it.shelf  !== d.shelf) return true;
     if(d.zone   !== undefined && it.zone   !== d.zone)  return true;
     if(d.status && STATUS[d.status] && it.status !== d.status) return true;
+    if(d.set) for(const k in d.set)
+      if(JSON.stringify(it[k]) !== JSON.stringify(d.set[k])) return true;
     return false;
   });
 }
@@ -3256,6 +3262,8 @@ async function runUpdates(){
       const b = {...it};
       delete b.id;
       const from = b.status;
+      // anything the bundle carries wins; it was merged against this record already
+      if(d.set) for(const k in d.set){ if(k !== "id" && k !== "hist") b[k] = d.set[k]; }
       if(d.shelf !== undefined){
         b.shelf = d.shelf;
         // fall back to the label's own leading letter if zones are not set up yet
