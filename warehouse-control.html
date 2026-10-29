@@ -1,0 +1,3154 @@
+<title>ChinaHub Warehouse Control</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+/* Layout: sticky command bar over tabbed views; dense manifest tables on desktop
+   that fold into stacked record cards at phone width. Scan station is home. */
+:root{
+  --bg:#f3f6f5; --surface:#ffffff; --surface-2:#e9eeed; --surface-3:#dde4e3;
+  --line:#ccd6d4; --line-strong:#aebab8;
+  --fg:#141e1d; --fg-dim:#566766; --fg-faint:#7d8d8b;
+  --primary:#0b5c5e; --primary-hi:#0a4a4c; --primary-fg:#ffffff; --primary-wash:#dfeceb;
+  --st-expected:#6b7a79; --st-received:#9a5b06; --st-shelved:#0f766e;
+  --st-released:#4338ca; --st-delivered:#15803d;
+  --danger:#b4231d; --danger-wash:#fae6e4; --warn:#9a5b06; --ok:#15803d;
+  --shadow:0 1px 2px rgba(10,30,28,.07), 0 8px 24px -12px rgba(10,30,28,.18);
+  --shadow-lg:0 10px 48px -12px rgba(10,30,28,.34);
+  --r:10px; --r-sm:7px; --r-lg:16px;
+  --display:"Archivo","Segoe UI",system-ui,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+  --head-h:104px;
+}
+@media (prefers-color-scheme:dark){ :root:not([data-theme="light"]){
+  --bg:#0d1413; --surface:#151e1d; --surface-2:#1d2726; --surface-3:#273332;
+  --line:#2b3837; --line-strong:#3e4e4c;
+  --fg:#e4edec; --fg-dim:#94a4a2; --fg-faint:#748482;
+  --primary:#2fa39b; --primary-hi:#47b8af; --primary-fg:#04201f; --primary-wash:#16302f;
+  --st-expected:#8b9b99; --st-received:#d08a2a; --st-shelved:#2fa39b;
+  --st-released:#8b87f0; --st-delivered:#49ab62;
+  --danger:#e8655c; --danger-wash:#2e1a19; --warn:#d08a2a; --ok:#49ab62;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+  --shadow-lg:0 10px 48px -12px rgba(0,0,0,.75);
+  color-scheme:dark;
+}}
+:root[data-theme="dark"]{
+  --bg:#0d1413; --surface:#151e1d; --surface-2:#1d2726; --surface-3:#273332;
+  --line:#2b3837; --line-strong:#3e4e4c;
+  --fg:#e4edec; --fg-dim:#94a4a2; --fg-faint:#748482;
+  --primary:#2fa39b; --primary-hi:#47b8af; --primary-fg:#04201f; --primary-wash:#16302f;
+  --st-expected:#8b9b99; --st-received:#d08a2a; --st-shelved:#2fa39b;
+  --st-released:#8b87f0; --st-delivered:#49ab62;
+  --danger:#e8655c; --danger-wash:#2e1a19; --warn:#d08a2a; --ok:#49ab62;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+  --shadow-lg:0 10px 48px -12px rgba(0,0,0,.75);
+  color-scheme:dark;
+}
+
+*{box-sizing:border-box}
+body{
+  background:var(--bg); color:var(--fg);
+  font-family:var(--display); font-size:15px; line-height:1.45;
+  -webkit-font-smoothing:antialiased;
+}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:60;background:var(--surface)}
+h1,h2,h3{margin:0;text-wrap:balance;letter-spacing:-.015em;font-weight:600}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2.5px solid var(--primary);outline-offset:2px;border-radius:4px}
+.mono{font-family:var(--mono);font-feature-settings:"zero" 1}
+.num{font-variant-numeric:tabular-nums}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+@media (prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+
+/* ---------- shell ---------- */
+.gut{padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.top{
+  position:sticky; top:env(safe-area-inset-top,0px); z-index:50;
+  background:var(--surface); border-bottom:1px solid var(--line);
+}
+.top-in{display:flex;align-items:center;gap:12px;padding-block:9px;max-width:1500px;margin:0 auto}
+.brand{display:flex;align-items:center;gap:10px;min-width:0}
+.mark{
+  width:30px;height:30px;flex:none;border-radius:8px;background:var(--primary);color:var(--primary-fg);
+  display:grid;place-items:center;font-weight:700;font-size:13px;letter-spacing:-.04em;
+}
+.brand-tx{min-width:0}
+.brand-tx b{display:block;font-size:14.5px;font-weight:650;letter-spacing:-.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.brand-tx span{display:block;font-size:11px;color:var(--fg-faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.top-act{display:flex;align-items:center;gap:7px;margin-left:auto}
+.qwrap{position:relative;display:none}
+@media (min-width:760px){.qwrap{display:block}}
+.qwrap svg{position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--fg-faint);pointer-events:none}
+#quick{
+  width:210px;padding:7px 10px 7px 30px;border:1px solid var(--line);border-radius:var(--r-sm);
+  background:var(--bg);font-size:13px;
+}
+#quick:focus{border-color:var(--primary);background:var(--surface)}
+.iconbtn{
+  width:33px;height:33px;flex:none;display:grid;place-items:center;border:1px solid var(--line);
+  border-radius:var(--r-sm);background:var(--surface);color:var(--fg-dim);
+}
+.iconbtn:hover{background:var(--surface-2);color:var(--fg)}
+.iconbtn[aria-pressed="true"]{background:var(--primary);border-color:var(--primary);color:var(--primary-fg)}
+.who{display:none;align-items:center;gap:7px;padding:3px 9px 3px 3px;border:1px solid var(--line);border-radius:999px;font-size:12.5px;max-width:170px}
+@media (min-width:980px){.who{display:flex}}
+.who img{width:23px;height:23px;border-radius:50%;flex:none;background:var(--surface-2)}
+.who b{font-weight:550;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.tabs{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none;max-width:1500px;margin:0 auto}
+.tabs::-webkit-scrollbar{display:none}
+.tab{
+  flex:none;display:flex;align-items:center;gap:6px;padding:9px 13px 10px;background:none;border:0;
+  border-bottom:2.5px solid transparent;color:var(--fg-dim);font-size:13.5px;font-weight:550;white-space:nowrap;
+}
+.tab:hover{color:var(--fg)}
+.tab[aria-selected="true"]{color:var(--primary);border-bottom-color:var(--primary)}
+.tab .cnt{
+  font-family:var(--mono);font-size:10.5px;font-variant-numeric:tabular-nums;padding:1px 5px;border-radius:999px;
+  background:var(--surface-2);color:var(--fg-dim);font-weight:500;
+}
+.tab[aria-selected="true"] .cnt{background:var(--primary-wash);color:var(--primary)}
+
+main{max-width:1500px;margin:0 auto;padding-block:18px 96px}
+.view{display:flex;flex-direction:column;gap:16px}
+.vhead{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px 16px}
+.vhead h2{font-size:19px}
+.vhead p{margin:2px 0 0;font-size:13px;color:var(--fg-dim);max-width:62ch}
+
+/* ---------- primitives ---------- */
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow)}
+.pad{padding:14px}
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:8px 13px;border-radius:var(--r-sm);
+  border:1px solid var(--line);background:var(--surface);color:var(--fg);font-size:13.5px;font-weight:550;
+}
+.btn:hover{background:var(--surface-2)}
+.btn.pri{background:var(--primary);border-color:var(--primary);color:var(--primary-fg)}
+.btn.pri:hover{background:var(--primary-hi);border-color:var(--primary-hi)}
+.btn.dgr{color:var(--danger);border-color:var(--line)}
+.btn.dgr:hover{background:var(--danger-wash)}
+.btn.sm{padding:5px 9px;font-size:12.5px;gap:5px}
+.btn.wide{width:100%}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn:disabled:hover{background:var(--surface)}
+label.fl{display:block;font-size:11px;font-weight:600;letter-spacing:.055em;text-transform:uppercase;color:var(--fg-faint);margin-bottom:4px}
+.inp,select.inp,textarea.inp{
+  width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:var(--r-sm);
+  background:var(--bg);font-size:14px;
+}
+.inp:focus{border-color:var(--primary);background:var(--surface)}
+textarea.inp{resize:vertical;min-height:62px}
+.grid{display:grid;gap:11px}
+.g2{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.g3{grid-template-columns:repeat(auto-fit,minmax(118px,1fr))}
+.row{display:flex;flex-wrap:wrap;gap:9px;align-items:center}
+.sep{height:1px;background:var(--line);border:0;margin:0}
+
+.chip{
+  display:inline-flex;align-items:center;gap:5px;padding:2.5px 8px;border-radius:999px;
+  font-size:11.5px;font-weight:600;letter-spacing:.01em;border:1px solid transparent;white-space:nowrap;
+}
+.chip .dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
+.s-expected{color:var(--st-expected);background:color-mix(in srgb,var(--st-expected) 12%,transparent);border-color:color-mix(in srgb,var(--st-expected) 30%,transparent)}
+.s-received{color:var(--st-received);background:color-mix(in srgb,var(--st-received) 12%,transparent);border-color:color-mix(in srgb,var(--st-received) 30%,transparent)}
+.s-shelved{color:var(--st-shelved);background:color-mix(in srgb,var(--st-shelved) 12%,transparent);border-color:color-mix(in srgb,var(--st-shelved) 30%,transparent)}
+.s-released{color:var(--st-released);background:color-mix(in srgb,var(--st-released) 12%,transparent);border-color:color-mix(in srgb,var(--st-released) 30%,transparent)}
+.s-delivered{color:var(--st-delivered);background:color-mix(in srgb,var(--st-delivered) 12%,transparent);border-color:color-mix(in srgb,var(--st-delivered) 30%,transparent)}
+.pay-no{color:var(--danger);background:var(--danger-wash);border-color:color-mix(in srgb,var(--danger) 28%,transparent)}
+.pay-ok{color:var(--ok);background:color-mix(in srgb,var(--ok) 12%,transparent);border-color:color-mix(in srgb,var(--ok) 28%,transparent)}
+.chip.ghost{color:var(--fg-dim);background:var(--surface-2);border-color:var(--line)}
+.chip.late{color:var(--warn);background:color-mix(in srgb,var(--warn) 13%,transparent);border-color:color-mix(in srgb,var(--warn) 32%,transparent)}
+
+/* ---------- stat tiles ---------- */
+.tiles{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(136px,1fr))}
+.tile{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:11px 13px;text-align:left;display:flex;flex-direction:column;gap:3px}
+.tile .k{font-size:10.5px;font-weight:600;letter-spacing:.055em;text-transform:uppercase;color:var(--fg-faint)}
+.tile .v{font-size:25px;font-weight:650;letter-spacing:-.03em;font-variant-numeric:tabular-nums;line-height:1.1}
+.tile .n{font-size:11.5px;color:var(--fg-dim)}
+.tile.on{border-color:var(--primary);box-shadow:inset 0 0 0 1px var(--primary)}
+.tile[data-k] {cursor:pointer}
+.tile .bar{height:3px;border-radius:2px;background:var(--surface-3);overflow:hidden;margin-top:2px}
+.tile .bar i{display:block;height:100%;background:var(--primary)}
+
+/* ---------- scan station ---------- */
+.modes{display:grid;gap:7px;grid-template-columns:repeat(auto-fit,minmax(104px,1fr))}
+.mode{
+  padding:10px 8px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface);
+  display:flex;flex-direction:column;align-items:center;gap:4px;font-size:12.5px;font-weight:600;color:var(--fg-dim);
+}
+.mode:hover{background:var(--surface-2);color:var(--fg)}
+.mode[aria-pressed="true"]{background:var(--primary);border-color:var(--primary);color:var(--primary-fg)}
+.mode[aria-pressed="true"] small{color:var(--primary-fg);opacity:.8}
+.mode small{font-size:10px;font-weight:500;color:var(--fg-faint);text-align:center;line-height:1.2}
+.scanbox{display:flex;flex-direction:column;gap:9px}
+#scanin{
+  width:100%;padding:16px 15px;border:2px dashed var(--line-strong);border-radius:var(--r);
+  background:var(--bg);font-family:var(--mono);font-size:21px;letter-spacing:.04em;font-weight:500;
+}
+#scanin:focus{border-style:solid;border-color:var(--primary);background:var(--surface)}
+#scanin::placeholder{font-family:var(--display);font-size:15px;letter-spacing:0;color:var(--fg-faint)}
+.scanhint{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12.5px;color:var(--fg-dim)}
+.dest{
+  display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;padding:11px;border-radius:var(--r-sm);
+  background:var(--primary-wash);border:1px solid color-mix(in srgb,var(--primary) 26%,transparent);
+}
+.dest .f{flex:1 1 112px;min-width:0}
+.dest label.fl{color:var(--primary)}
+.destnow{font-family:var(--mono);font-size:17px;font-weight:600;color:var(--primary);letter-spacing:.02em}
+.feed{display:flex;flex-direction:column;gap:0}
+.fr{display:flex;gap:10px;align-items:center;padding:9px 2px;border-bottom:1px solid var(--line);font-size:13px}
+.fr:last-child{border-bottom:0}
+.fr .ic{width:22px;height:22px;flex:none;border-radius:6px;display:grid;place-items:center;font-size:12px;font-weight:700}
+.fr.ok .ic{background:color-mix(in srgb,var(--ok) 15%,transparent);color:var(--ok)}
+.fr.warn .ic{background:color-mix(in srgb,var(--warn) 15%,transparent);color:var(--warn)}
+.fr.bad .ic{background:var(--danger-wash);color:var(--danger)}
+.fr .bd{min-width:0;flex:1}
+.fr .bd b{display:block;font-family:var(--mono);font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fr .bd span{display:block;font-size:12px;color:var(--fg-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fr time{font-family:var(--mono);font-size:11px;color:var(--fg-faint);flex:none;font-variant-numeric:tabular-nums}
+
+/* ---------- table ---------- */
+.tscroll{overflow-x:auto;border-radius:var(--r);border:1px solid var(--line);background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th{
+  text-align:left;font-size:10.5px;font-weight:650;letter-spacing:.055em;text-transform:uppercase;color:var(--fg-faint);
+  padding:9px 10px;border-bottom:1px solid var(--line);background:var(--surface-2);white-space:nowrap;position:sticky;top:0;z-index:1;
+}
+th.sortable{cursor:pointer;user-select:none}
+th.sortable:hover{color:var(--fg)}
+td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:middle}
+tbody tr:last-child td{border-bottom:0}
+tbody tr{cursor:pointer}
+tbody tr:hover td{background:var(--surface-2)}
+tbody tr.sel td{background:var(--primary-wash)}
+td.r{text-align:right;font-variant-numeric:tabular-nums}
+.bc{font-family:var(--mono);font-size:12.5px;font-weight:550;letter-spacing:.015em}
+.nm{font-weight:550}
+.sub{font-size:11.5px;color:var(--fg-faint)}
+.loc{font-family:var(--mono);font-size:12px;font-weight:550}
+.mobile-cards{display:none;flex-direction:column;gap:9px}
+@media (max-width:739px){
+  .tscroll{display:none}
+  .mobile-cards{display:flex}
+}
+.mc{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:11px;display:flex;flex-direction:column;gap:7px;text-align:left;width:100%}
+.mc:hover{background:var(--surface-2)}
+.mc .t{display:flex;justify-content:space-between;gap:9px;align-items:flex-start}
+.mc .t b{font-family:var(--mono);font-size:12.5px;font-weight:600}
+.mc .l2{font-weight:550;font-size:14px}
+.mc .meta{display:flex;flex-wrap:wrap;gap:5px 12px;font-size:12px;color:var(--fg-dim)}
+.mc .meta i{font-style:normal;color:var(--fg-faint)}
+
+.empty{
+  display:flex;flex-direction:column;align-items:center;gap:9px;padding:40px 20px;text-align:center;
+  border:1px dashed var(--line-strong);border-radius:var(--r);background:var(--surface);
+}
+.empty .eic{width:42px;height:42px;border-radius:12px;background:var(--surface-2);display:grid;place-items:center;color:var(--fg-faint)}
+.empty h3{font-size:16px}
+.empty p{margin:0;font-size:13.5px;color:var(--fg-dim);max-width:46ch}
+
+/* ---------- filters ---------- */
+.filters{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.fchips{display:flex;flex-wrap:wrap;gap:5px}
+.fchip{
+  padding:5px 10px;border-radius:999px;border:1px solid var(--line);background:var(--surface);
+  font-size:12.5px;font-weight:550;color:var(--fg-dim);display:inline-flex;align-items:center;gap:6px;
+}
+.fchip:hover{background:var(--surface-2)}
+.fchip[aria-pressed="true"]{background:var(--fg);border-color:var(--fg);color:var(--bg)}
+.fchip .c{font-family:var(--mono);font-size:10.5px;opacity:.75;font-variant-numeric:tabular-nums}
+select.mini,input.mini{padding:6px 9px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface);font-size:12.5px}
+.bulkbar{
+  display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:9px 12px;border-radius:var(--r-sm);
+  background:var(--fg);color:var(--bg);font-size:13px;font-weight:550;
+}
+.bulkbar .btn{background:transparent;border-color:color-mix(in srgb,var(--bg) 35%,transparent);color:var(--bg)}
+.bulkbar .btn:hover{background:color-mix(in srgb,var(--bg) 16%,transparent)}
+
+/* ---------- parcels ---------- */
+.pcard{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+.pcard.inc{border-left:3px solid var(--warn)}
+.pcard.full{border-left:3px solid var(--ok)}
+.phead{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:11px 13px;width:100%;background:none;border:0;text-align:left}
+.phead:hover{background:var(--surface-2)}
+.phead .pno{font-family:var(--mono);font-size:14.5px;font-weight:600;letter-spacing:.02em}
+.prog{flex:1 1 130px;min-width:90px;height:6px;border-radius:3px;background:var(--surface-3);overflow:hidden}
+.prog i{display:block;height:100%;background:var(--ok)}
+.prog.inc i{background:var(--warn)}
+.pbody{border-top:1px solid var(--line);background:var(--bg)}
+.pbody .pi{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;padding:8px 13px;border-bottom:1px solid var(--line);font-size:12.5px;width:100%;background:none;border-left:0;border-right:0;border-top:0;text-align:left}
+.pbody .pi:last-child{border-bottom:0}
+.pbody .pi:hover{background:var(--surface-2)}
+
+/* ---------- zones ---------- */
+.zgrid{display:grid;gap:11px;grid-template-columns:repeat(auto-fit,minmax(178px,1fr))}
+.zcard{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:13px;display:flex;flex-direction:column;gap:8px;text-align:left}
+.zcard:hover{border-color:var(--line-strong);background:var(--surface-2)}
+.zcard .zt{display:flex;align-items:baseline;gap:8px}
+.zcard .zc{font-family:var(--mono);font-size:19px;font-weight:650;letter-spacing:-.01em}
+.zcard .zn{font-size:12.5px;color:var(--fg-dim);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.zcard .zv{font-size:22px;font-weight:650;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.zcard .zbar{height:5px;border-radius:3px;background:var(--surface-3);overflow:hidden}
+.zcard .zbar i{display:block;height:100%;background:var(--st-shelved)}
+.zcard .zbar.stg i{background:var(--st-received)}
+.zcard .zbar.hot i{background:var(--danger)}
+
+/* ---------- money ---------- */
+.mrow{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:11px 13px;border-bottom:1px solid var(--line)}
+.mrow:last-child{border-bottom:0}
+.mrow .cu{font-weight:600;flex:1 1 150px;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.mrow .mv{font-family:var(--mono);font-variant-numeric:tabular-nums;font-weight:600;font-size:14px}
+.big{font-size:30px;font-weight:650;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+.sub2{font-size:12.5px;color:var(--fg-dim)}
+
+/* ---------- drawer ---------- */
+.scrim{position:fixed;inset:0;background:rgba(8,20,19,.5);z-index:70;backdrop-filter:blur(2px)}
+.drawer{
+  position:fixed;z-index:80;background:var(--surface);box-shadow:var(--shadow-lg);
+  display:flex;flex-direction:column;
+  inset:auto 0 0 0;max-height:88vh;border-radius:var(--r-lg) var(--r-lg) 0 0;
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (min-width:740px){
+  .drawer{
+    inset:env(safe-area-inset-top,0px) 0 0 auto;width:min(480px,100%);max-height:none;border-radius:0;
+    border-left:1px solid var(--line);
+  }
+}
+.dhead{display:flex;gap:10px;align-items:flex-start;padding:14px;border-bottom:1px solid var(--line);flex:none}
+.dhead .dt{min-width:0;flex:1}
+.dhead .dt b{display:block;font-family:var(--mono);font-size:14px;font-weight:600;word-break:break-all}
+.dhead .dt span{display:block;font-size:15px;font-weight:600;margin-top:2px}
+.dbody{overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:14px;flex:1}
+.dfoot{padding:12px 14px;border-top:1px solid var(--line);display:flex;flex-wrap:wrap;gap:8px;flex:none;background:var(--surface-2)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:13px}
+.kv dt{color:var(--fg-faint);font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;align-self:center}
+.kv dd{margin:0;font-weight:550;overflow-wrap:anywhere}
+.hist{display:flex;flex-direction:column;gap:0;font-size:12.5px}
+.hi{display:flex;gap:9px;padding:7px 0;border-bottom:1px solid var(--line)}
+.hi:last-child{border-bottom:0}
+.hi .ht{font-family:var(--mono);font-size:11px;color:var(--fg-faint);flex:none;width:92px;font-variant-numeric:tabular-nums}
+.hi .hb{min-width:0}
+.hi .hb b{font-weight:600}
+.hi .hb span{display:block;color:var(--fg-dim);font-size:11.5px}
+
+/* ---------- misc ---------- */
+.fab{
+  position:fixed;z-index:40;right:max(16px,env(safe-area-inset-right,0px));
+  bottom:calc(16px + env(safe-area-inset-bottom,0px));
+  display:inline-flex;align-items:center;gap:8px;padding:12px 17px;border-radius:999px;border:0;
+  background:var(--primary);color:var(--primary-fg);font-weight:650;font-size:14px;box-shadow:var(--shadow-lg);
+}
+.fab:hover{background:var(--primary-hi)}
+.toasts{
+  position:fixed;z-index:95;left:max(16px,env(safe-area-inset-left,0px));right:max(16px,env(safe-area-inset-right,0px));
+  bottom:calc(76px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:7px;align-items:center;pointer-events:none;
+}
+.toast{
+  pointer-events:auto;background:var(--fg);color:var(--bg);padding:9px 14px;border-radius:999px;font-size:13px;font-weight:550;
+  box-shadow:var(--shadow-lg);display:flex;align-items:center;gap:10px;max-width:min(460px,100%);
+}
+.toast.bad{background:var(--danger);color:#fff}
+.toast button{background:none;border:0;color:inherit;font-weight:700;text-decoration:underline;padding:0;font-size:13px}
+.banner{
+  display:flex;flex-wrap:wrap;gap:9px;align-items:center;padding:10px 13px;border-radius:var(--r-sm);
+  border:1px solid color-mix(in srgb,var(--warn) 34%,transparent);background:color-mix(in srgb,var(--warn) 11%,transparent);
+  font-size:13px;color:var(--fg);
+}
+.banner.ro{border-color:color-mix(in srgb,var(--st-released) 34%,transparent);background:color-mix(in srgb,var(--st-released) 10%,transparent)}
+.banner b{font-weight:650}
+.banner .btn{margin-left:auto}
+.modal{
+  position:fixed;z-index:90;left:50%;top:50%;transform:translate(-50%,-50%);
+  width:min(400px,calc(100vw - 32px));background:var(--surface);border:1px solid var(--line);
+  border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:18px;display:flex;flex-direction:column;gap:13px;
+}
+.modal h3{font-size:16.5px}
+.modal p{margin:0;font-size:13.5px;color:var(--fg-dim)}
+.modal .mact{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
+.sect-t{font-size:11px;font-weight:650;letter-spacing:.06em;text-transform:uppercase;color:var(--fg-faint)}
+.hr-t{display:flex;align-items:center;gap:10px}
+.hr-t::after{content:"";flex:1;height:1px;background:var(--line)}
+.ctot{font-family:var(--mono);font-size:12px;color:var(--fg-faint);font-variant-numeric:tabular-nums}
+.mstrip{display:flex;flex-wrap:wrap;gap:8px 24px;padding:10px 13px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r)}
+.mcell{display:flex;flex-direction:column;gap:1px;min-width:88px}
+.mstrip .mk{font-size:10.5px;font-weight:600;letter-spacing:.055em;text-transform:uppercase;color:var(--fg-faint)}
+.mstrip .mv{font-size:16.5px;font-weight:620;font-variant-numeric:tabular-nums;letter-spacing:-.015em}
+.mstrip .mv.owed{color:var(--danger)}
+.mstrip .mnote{flex:1 1 100%;font-size:11.5px;color:var(--fg-dim)}
+.dropzone{border:1.5px dashed var(--line-strong);border-radius:var(--r-sm);padding:18px;text-align:center;font-size:13px;color:var(--fg-dim)}
+.dropzone.hot{border-color:var(--primary);background:var(--primary-wash);color:var(--primary)}
+.maplist{display:grid;gap:7px;grid-template-columns:repeat(auto-fit,minmax(168px,1fr))}
+.maprow{display:flex;gap:7px;align-items:center;font-size:12.5px}
+.maprow b{font-family:var(--mono);font-size:11.5px;flex:none;min-width:62px;color:var(--fg-dim);overflow:hidden;text-overflow:ellipsis}
+</style>
+
+<header class="top">
+  <div class="top-in gut">
+    <div class="brand">
+      <div class="mark">CH</div>
+      <div class="brand-tx">
+        <b id="whName">ChinaHub Warehouse</b>
+        <span id="whSub">China → Lebanon · consolidation hub</span>
+      </div>
+    </div>
+    <div class="top-act">
+      <div class="qwrap">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="quick" type="search" placeholder="Find parcel no., client, shipment" autocomplete="off">
+      </div>
+      <div class="who" id="who" hidden><img id="whoAv" alt=""><b id="whoNm"></b></div>
+      <button class="iconbtn" id="beepBtn" type="button" aria-pressed="true" title="Scan sound" aria-label="Toggle scan sound">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg>
+      </button>
+      <button class="iconbtn" id="setupBtn" type="button" title="Setup &amp; data" aria-label="Setup and data">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 7 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 15H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 7a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 9 2.6V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0 .3 1.9v0a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>
+      </button>
+    </div>
+  </div>
+  <nav class="tabs gut" role="tablist" id="tabs"></nav>
+</header>
+
+<main class="gut" id="main"></main>
+
+<button class="fab" id="fab" type="button">
+  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 8v8M11 8v8M15 8v8"/></svg>
+  Scan
+</button>
+
+<div class="toasts" id="toasts"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+<script>
+(() => {
+"use strict";
+
+/* ============================== constants ============================== */
+
+const STATUS = {
+  expected:  { label:"Not here yet", hint:"On the way from China — not received in this warehouse" },
+  received:  { label:"In warehouse", hint:"Arrived — in the shipping department, not yet on a shelf" },
+  shelved:   { label:"On shelf",     hint:"Put away in a zone at a shelf location" },
+  released:  { label:"Out for delivery", hint:"Left the warehouse with a driver" },
+  delivered: { label:"Delivered",    hint:"Handed over to the customer" },
+};
+const ORDER = ["expected","received","shelved","released","delivered"];
+const MODES = {
+  receive: { label:"Receive",  sub:"arrived at hub",   to:"received",  verb:"Received" },
+  shelve:  { label:"Put away", sub:"onto a shelf",     to:"shelved",   verb:"Shelved" },
+  release: { label:"Release",  sub:"to a driver",      to:"released",  verb:"Released" },
+  deliver: { label:"Deliver",  sub:"to the customer",  to:"delivered", verb:"Delivered" },
+  lookup:  { label:"Look up",  sub:"no change",        to:null,        verb:"Found" },
+};
+const TABS = [
+  ["scan","Scan"], ["stock","Stock"], ["clients","Clients"], ["parcels","Shipments"],
+  ["zones","Zones"], ["money","Money"], ["log","Log"], ["setup","Setup"],
+];
+const DEFAULTS = {
+  whName:"ChinaHub Warehouse", whSub:"China → Lebanon · consolidation hub",
+  currency:"USD", lbpRate:89500, freeDays:14, cnyPerUsd:7.1,
+  rateMode:"cbm", ratePerCbm:260, ratePerKg:4.5,
+};
+const FEED_MAX = 200, HIST_MAX = 25, SCANFEED_MAX = 14;
+
+/* ============================== state ============================== */
+
+const S = {
+  db:null, user:null, dl:null,
+  ready:false, canWrite:null, meId:null,
+  items:new Map(), zones:new Map(),
+  cfg:{...DEFAULTS}, feed:[],
+  tab:"scan", mode:"receive",
+  dest:{ zone:"", shelf:"" }, recvZone:"",
+  scanFeed:[], undo:null,
+  filters:{ status:"", zone:"", paid:"", q:"", parcel:"" },
+  clientQ:"",
+  sort:{ key:"updatedAt", dir:"desc" },
+  selected:new Set(), openParcels:new Set(), openId:null,
+  beep:true, modal:null, importRows:null, importMap:null,
+  importStatus:"received", importZone:"", showAll:false, showAllClients:false,
+  seed:null, seedPending:0, seedBusy:false, seedErr:"",
+  ups:null, upPending:0, upBusy:false,
+};
+
+/* ============================== helpers ============================== */
+
+const $  = (s,r=document) => r.querySelector(s);
+const el = (t,c,x) => { const n=document.createElement(t); if(c) n.className=c; if(x!=null) n.textContent=x; return n; };
+const esc = s => String(s??"");
+const now = () => Date.now();
+
+const nf0 = new Intl.NumberFormat("en-US",{maximumFractionDigits:0});
+const nf2 = new Intl.NumberFormat("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+const nf3 = new Intl.NumberFormat("en-US",{maximumFractionDigits:3});
+const money = n => "$" + nf2.format(Number(n)||0);
+const lbp   = n => nf0.format(Math.round((Number(n)||0) * (Number(S.cfg.lbpRate)||0))) + " LL";
+
+function fmtTime(ms){
+  if(!ms) return "—";
+  const d=new Date(ms), t=now()-ms;
+  if(t < 60000) return "just now";
+  if(t < 86400000) return d.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
+  return d.toLocaleDateString([], {day:"2-digit",month:"short"}) + " " +
+         d.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
+}
+function fmtDate(ms){ return ms ? new Date(ms).toLocaleDateString([], {day:"2-digit",month:"short",year:"2-digit"}) : "—"; }
+function daysSince(ms){ return ms ? Math.floor((now()-ms)/86400000) : null; }
+
+/** db path segments allow letters, digits and _ - . ~ : @ + only. */
+function docId(barcode){
+  const raw = String(barcode||"").trim();
+  const safe = raw.replace(/[^A-Za-z0-9_.~:@+-]/g,"_").slice(0,180);
+  if(!safe || safe === "." || safe === "..") return "bc_" + hash(raw);
+  return safe === raw ? safe : safe + "-" + hash(raw);
+}
+function hash(s){
+  let h=5381; for(let i=0;i<s.length;i++) h=((h<<5)+h+s.charCodeAt(i))|0;
+  return (h>>>0).toString(36);
+}
+function normBc(s){ return String(s||"").trim().replace(/\s+/g," "); }
+
+function toast(msg, kind, action){
+  const box=$("#toasts"); if(!box) return;
+  const t=el("div","toast"+(kind==="bad"?" bad":"")); t.append(el("span",null,msg));
+  if(action){ const b=el("button",null,action.label); b.type="button";
+    b.addEventListener("click",()=>{ t.remove(); action.fn(); }); t.append(b); }
+  box.append(t);
+  setTimeout(()=>t.remove(), action?8000:3400);
+}
+
+let AC=null;
+function ping(ok){
+  if(!S.beep) return;
+  try{
+    AC = AC || new (window.AudioContext||window.webkitAudioContext)();
+    if(AC.state==="suspended") AC.resume();
+    const o=AC.createOscillator(), g=AC.createGain();
+    o.type="square"; o.frequency.value = ok?1180:360;
+    g.gain.value=.05; o.connect(g); g.connect(AC.destination);
+    const t=AC.currentTime; o.start(t); g.gain.setValueAtTime(.05,t);
+    g.gain.exponentialRampToValueAtTime(.0001, t + (ok?.09:.22));
+    o.stop(t + (ok?.1:.24));
+  }catch(_){}
+}
+
+/* ------------------------------ write queue ------------------------------ */
+/* One write at a time per document path. */
+const Q = new Map();
+function write(path, fn){
+  const prev = Q.get(path) || Promise.resolve();
+  const next = prev.then(fn, fn).catch(e => {
+    const code = e && e.code;
+    if(code === "invalid_argument" && S.canWrite !== false){
+      S.canWrite = false; render();
+      toast("You have read-only access to this warehouse data.","bad");
+    } else if(code === "quota_exceeded"){
+      toast("The database is full. Archive delivered items in Setup.","bad");
+    } else if(code === "revoked" || code === "not_granted"){
+      toast("Your access to this data ended. Reload the page.","bad");
+    } else {
+      toast("Could not save that change. Try again.","bad");
+    }
+    throw e;
+  });
+  Q.set(path, next.catch(()=>{}));
+  return next;
+}
+const writable = () => S.ready && S.canWrite !== false;
+
+/* ============================== data shape ============================== */
+
+function blankItem(barcode){
+  return {
+    barcode:normBc(barcode), name:"", itemId:"", parcel:"", customer:"", phone:"",
+    clientId:"", status:"received", zone:"", shelf:"",
+    weightKg:0, cbm:0, cost:0, currency:S.cfg.currency, paid:false,
+    origin:"", route:"", qty:0, cny:0, declared:0, dims:"", payMethod:"",
+    notes:"", demo:false,
+    createdAt:now(), updatedAt:now(),
+    receivedAt:0, shelvedAt:0, releasedAt:0, deliveredAt:0,
+    updatedBy:S.meId||"", hist:[],
+  };
+}
+
+async function saveItem(id, body){
+  const clean = {...body, updatedAt:now(), updatedBy:S.meId||""};
+  await write("items/"+id, () => S.db.doc("items/"+id).set(clean));
+  return clean;
+}
+
+async function moveItem(id, toStatus, loc, note){
+  const cur = S.items.get(id); if(!cur) return null;
+  const before = JSON.parse(JSON.stringify(cur));
+  const b = {...cur};
+  delete b.id;
+  const from = b.status;
+  if(toStatus) b.status = toStatus;
+  if(loc){ if(loc.zone!=null) b.zone=loc.zone; if(loc.shelf!=null) b.shelf=loc.shelf; }
+  const t = now();
+  if(toStatus==="received"  && !b.receivedAt)  b.receivedAt=t;
+  if(toStatus==="shelved"){ if(!b.receivedAt) b.receivedAt=t; b.shelvedAt=t; }
+  if(toStatus==="released")  b.releasedAt=t;
+  if(toStatus==="delivered") b.deliveredAt=t;
+  b.hist = [{ t, by:S.meId||"", from, to:b.status,
+              loc:b.shelf||b.zone||"", note:note||"" }, ...(cur.hist||[])].slice(0,HIST_MAX);
+  await saveItem(id, b);
+  pushFeed({ t, by:S.meId||"", bc:b.barcode, nm:b.name, from, to:b.status, loc:b.shelf||b.zone||"" });
+  return { before, after:b };
+}
+
+function pushFeed(entry){
+  const entries = [entry, ...S.feed].slice(0,FEED_MAX);
+  S.feed = entries;
+  write("meta/feed", () => S.db.doc("meta/feed").set({ entries })).catch(()=>{});
+}
+
+async function saveCfg(patch){
+  S.cfg = {...S.cfg, ...patch};
+  await write("meta/settings", () => S.db.doc("meta/settings").set({...S.cfg}));
+}
+
+/* ============================== derived ============================== */
+
+const allItems = () => [...S.items.values()];
+
+/* Counts the whole warehouse by default, or just the items handed to it, so the
+   same tiles can describe a filtered slice without a second set of totals. */
+function counts(list){
+  const c = { total:0, expected:0, received:0, shelved:0, released:0, delivered:0, unpaid:0, unpaidAmt:0, late:0 };
+  for(const it of (list || S.items.values())){
+    c.total++; c[it.status] = (c[it.status]||0) + 1;
+    if(!it.paid && it.status!=="expected"){ c.unpaid++; c.unpaidAmt += Number(it.cost)||0; }
+    if(isLate(it)) c.late++;
+  }
+  return c;
+}
+function isLate(it){
+  if(it.status!=="shelved" && it.status!=="received") return false;
+  const d = daysSince(it.receivedAt);
+  return d != null && d > (Number(S.cfg.freeDays)||0);
+}
+function zoneCount(code){
+  let n=0; for(const it of S.items.values()) if(it.zone===code && it.status!=="delivered" && it.status!=="released") n++;
+  return n;
+}
+function parcelGroups(){
+  const m = new Map();
+  for(const it of S.items.values()){
+    const k = it.parcel || "(no shipment code)";
+    if(!m.has(k)) m.set(k,{ parcel:k, items:[], customers:new Set(), cost:0, unpaid:0, here:0 });
+    const g = m.get(k); g.items.push(it);
+    if(it.customer) g.customers.add(it.customer);
+    g.cost += Number(it.cost)||0;
+    if(!it.paid && it.status!=="expected") g.unpaid += Number(it.cost)||0;
+    if(it.status!=="expected") g.here++;
+  }
+  return [...m.values()].sort((a,b)=>{
+    const ai = a.here < a.items.length ? 0 : 1, bi = b.here < b.items.length ? 0 : 1;
+    if(ai!==bi) return ai-bi;
+    return String(b.parcel).localeCompare(String(a.parcel));
+  });
+}
+function clientGroups(){
+  const m = new Map();
+  for(const it of S.items.values()){
+    const k = it.customer || "(no client set)";
+    if(!m.has(k)) m.set(k, {
+      cu:k, phone:"", items:[], parcels:new Set(), cost:0, owe:0, last:0,
+      by:{ expected:0, received:0, shelved:0, released:0, delivered:0 },
+    });
+    const g = m.get(k);
+    g.items.push(it);
+    g.by[it.status] = (g.by[it.status]||0) + 1;
+    g.cost += Number(it.cost)||0;
+    if(!it.paid && it.status!=="expected") g.owe += Number(it.cost)||0;
+    if(it.phone && !g.phone) g.phone = it.phone;
+    if(it.parcel) g.parcels.add(it.parcel);
+    if((it.updatedAt||0) > g.last) g.last = it.updatedAt||0;
+  }
+  return [...m.values()].sort((a,b) =>
+    b.owe - a.owe || b.items.length - a.items.length || a.cu.localeCompare(b.cu));
+}
+
+/* One matcher behind every filtered view. `skip` drops a single facet from the
+   test, which is how a tile reports the slice it would select rather than the
+   slice already on screen: without it, choosing Unpaid would make the unpaid
+   figure its own total, and choosing On shelf would hide the other statuses. */
+function matchesFilters(it, skip){
+  const f = S.filters, q = f.q.trim().toLowerCase();
+  if(skip !== "status" && f.status && it.status !== f.status) return false;
+  if(skip !== "zone"   && f.zone   && it.zone   !== f.zone)   return false;
+  if(f.parcel && it.parcel !== f.parcel) return false;
+  if(skip !== "paid"){
+    if(f.paid === "no"   && (it.paid || it.status === "expected")) return false;
+    if(f.paid === "yes"  && !it.paid) return false;
+    if(f.paid === "late" && !isLate(it)) return false;
+  }
+  if(q){
+    const hay = [it.barcode,it.name,it.itemId,it.parcel,it.customer,it.clientId,it.phone,
+                 it.shelf,it.zone,it.origin,it.route,it.notes].join(" ").toLowerCase();
+    if(!hay.includes(q)) return false;
+  }
+  return true;
+}
+
+/* every item the current filters allow, ignoring one facet */
+const sliceBut = skip => allItems().filter(it => matchesFilters(it, skip));
+
+/* what a set of items is worth: billed, settled, and still owed */
+function moneyOf(list){
+  let charged = 0, settled = 0, owed = 0, n = 0;
+  for(const it of list){
+    const c = Number(it.cost) || 0;
+    n++; charged += c;
+    if(it.paid) settled += c;
+    else if(it.status !== "expected") owed += c;
+  }
+  return { n, charged, settled, owed };
+}
+
+function filtered(){
+  let out = allItems().filter(it => matchesFilters(it));
+  const { key, dir } = S.sort, s = dir==="asc" ? 1 : -1;
+  out.sort((a,b)=>{
+    let x=a[key], y=b[key];
+    if(key==="status"){ x=ORDER.indexOf(a.status); y=ORDER.indexOf(b.status); }
+    if(typeof x==="string" || typeof y==="string") return String(x??"").localeCompare(String(y??"")) * s;
+    return ((Number(x)||0) - (Number(y)||0)) * s;
+  });
+  return out;
+}
+function calcCost(it){
+  const m = S.cfg.rateMode;
+  if(m==="cbm") return +( (Number(it.cbm)||0)  * (Number(S.cfg.ratePerCbm)||0) ).toFixed(2);
+  if(m==="kg")  return +( (Number(it.weightKg)||0) * (Number(S.cfg.ratePerKg)||0) ).toFixed(2);
+  return Number(it.cost)||0;
+}
+
+/* ============================== profiles ============================== */
+
+let PROF = {};
+async function resolveProfiles(ids){
+  if(!S.user || !ids.length) return;
+  try{
+    const got = await S.user.profiles([...new Set(ids.filter(Boolean))]);
+    let changed = false;
+    for(const k in got){ if(!PROF[k] || PROF[k].name !== got[k].name){ changed = true; } PROF[k] = got[k]; }
+    if(changed) paintNames();
+  }catch(_){}
+}
+function nameOf(id){ return (PROF[id] && PROF[id].name) || (id===S.meId ? "You" : "Staff"); }
+function paintNames(){
+  document.querySelectorAll("[data-uid]").forEach(n => { n.textContent = nameOf(n.dataset.uid); });
+}
+
+/* ============================== render: shell ============================== */
+
+function render(){
+  renderTabs();
+  const m = $("#main"); m.textContent = "";
+  const v = el("section","view");
+  if(S.canWrite === false) v.append(banner("ro","Read-only access.","You can see everything but cannot change records. Ask the owner for Contributor access."));
+  if(hasDemo()) v.append(demoBanner());
+  if(S.seedPending > 0 && writable()) v.append(seedCard());
+  // a missing bundle is normal once the goods are loaded; only flag it on an empty warehouse
+  else if(S.seedErr && !S.items.size && writable()) v.append(seedErrCard());
+  if(S.upPending > 0 && writable()) v.append(upCard());
+  ({ scan:vScan, stock:vStock, clients:vClients, parcels:vParcels, zones:vZones,
+     money:vMoney, log:vLog, setup:vSetup }[S.tab] || vScan)(v);
+  m.append(v);
+  $("#fab").hidden = (S.tab === "scan");
+  $("#whName").textContent = S.cfg.whName || DEFAULTS.whName;
+  $("#whSub").textContent  = S.cfg.whSub  || DEFAULTS.whSub;
+  const ids = new Set();
+  S.feed.slice(0,40).forEach(e => e.by && ids.add(e.by));
+  if(S.openId){ const it=S.items.get(S.openId); (it?.hist||[]).forEach(h=>h.by&&ids.add(h.by)); }
+  if(ids.size) resolveProfiles([...ids]);
+}
+
+function renderTabs(){
+  const c = counts(), bar = $("#tabs"); bar.textContent = "";
+  const badge = { stock:c.total, clients:clientGroups().length, parcels:parcelGroups().length,
+                  zones:S.zones.size, money:c.unpaid };
+  for(const [id,label] of TABS){
+    const b = el("button","tab"); b.type="button"; b.role="tab";
+    b.setAttribute("aria-selected", String(S.tab===id));
+    b.append(el("span",null,label));
+    if(badge[id]) b.append(el("span","cnt", nf0.format(badge[id])));
+    b.addEventListener("click", () => go(id));
+    bar.append(b);
+  }
+}
+function go(tab){
+  S.tab = tab; S.selected.clear();
+  try{ location.hash = tab; }catch(_){}
+  render(); window.scrollTo({ top:0, behavior:"instant" });
+  if(tab==="scan") setTimeout(focusScan, 30);
+}
+function banner(kind,strong,rest,action){
+  const b = el("div","banner"+(kind?" "+kind:""));
+  b.append(el("b",null,strong), el("span",null," "+rest));
+  if(action){ const x=el("button","btn sm",action.label); x.type="button"; x.addEventListener("click",action.fn); b.append(x); }
+  return b;
+}
+function hasDemo(){ for(const it of S.items.values()) if(it.demo) return true; return false; }
+function demoBanner(){
+  return banner("", "Example rows are loaded.",
+    "They show how the system works. Remove them before you enter real stock.",
+    { label:"Remove examples", fn:askClearDemo });
+}
+
+/* ============================== view: scan ============================== */
+
+function vScan(v){
+  const head = el("div","vhead");
+  const hb = el("div");
+  hb.append(el("h2",null,"Scan station"));
+  hb.append(el("p",null,"Pick what you are doing, then scan barcodes one after another. A handheld scanner types into the box and presses Enter by itself — you do not need to touch the screen between items."));
+  head.append(hb);
+  v.append(head);
+
+  // mode picker
+  const modes = el("div","modes");
+  for(const k in MODES){
+    const m = MODES[k], b = el("button","mode"); b.type="button";
+    b.setAttribute("aria-pressed", String(S.mode===k));
+    b.append(el("span",null,m.label), el("small",null,m.sub));
+    b.addEventListener("click", () => { S.mode=k; render(); focusScan(); });
+    modes.append(b);
+  }
+  v.append(modes);
+
+  // destination / area
+  if(S.mode==="shelve")  v.append(destShelf());
+  if(S.mode==="receive") v.append(destArea());
+
+  // scan box
+  const box = el("div","card pad scanbox");
+  const inp = el("input"); inp.className=""; inp.id="scanin"; inp.type="text";
+  inp.autocomplete="off"; inp.autocapitalize="characters"; inp.spellcheck=false;
+  inp.placeholder = S.mode==="lookup" ? "Scan or type a barcode to look it up"
+                  : "Scan a barcode — " + MODES[S.mode].label.toLowerCase();
+  inp.setAttribute("aria-label","Barcode");
+  inp.addEventListener("keydown", e => {
+    if(e.key!=="Enter") return;
+    e.preventDefault();
+    const val = inp.value; inp.value = "";
+    if(normBc(val)) handleScan(val);
+  });
+  box.append(inp);
+
+  const hint = el("div","scanhint");
+  hint.append(el("span",null, MODES[S.mode].to ? STATUS[MODES[S.mode].to].hint : "Shows the record without changing it."));
+  if(S.mode==="shelve")
+    hint.append(el("span","chip ghost","Tip: scan a shelf label like A-03-2 to switch destination"));
+  const n = S.scanFeed.filter(f=>f.kind==="ok").length;
+  if(n) hint.append(el("span","chip pay-ok", n + " done this session"));
+  box.append(hint);
+
+  if(!writable()) { const b = el("div","scanhint"); b.append(el("span","chip pay-no","Read-only — scanning will not save")); box.append(b); }
+  v.append(box);
+
+  // quick-add
+  if(S.pendingAdd) v.append(quickAdd(S.pendingAdd));
+
+  // feed
+  if(S.scanFeed.length){
+    const c = el("div","card");
+    const h = el("div","pad"); h.style.paddingBottom="0";
+    const hr = el("div","hr-t"); hr.append(el("span","sect-t","This session"));
+    h.append(hr); c.append(h);
+    const f = el("div","feed"); f.style.padding="4px 14px 10px";
+    for(const r of S.scanFeed){
+      const row = el("div","fr "+r.kind);
+      row.append(el("div","ic", r.kind==="ok" ? "✓" : r.kind==="warn" ? "!" : "✕"));
+      const bd = el("div","bd"); bd.append(el("b",null,r.bc), el("span",null,r.msg)); row.append(bd);
+      if(r.undo && S.undo && S.undo.key===r.key && writable()){
+        const u = el("button","btn sm","Undo"); u.type="button";
+        u.addEventListener("click", doUndo); row.append(u);
+      }
+      row.append(el("time",null,fmtTime(r.t)));
+      f.append(row);
+    }
+    c.append(f); v.append(c);
+  } else {
+    v.append(emptyState("barcode","Nothing scanned yet",
+      "Your scans will appear here with what happened to each item, so you can check your work and undo a mistake."));
+  }
+}
+
+function destShelf(){
+  const d = el("div","dest");
+  const shelfZones = [...S.zones.values()].filter(z=>z.kind==="shelf");
+  const f1 = el("div","f");
+  f1.append(labelFor("dZone","Zone"));
+  const sz = el("select","inp"); sz.id="dZone";
+  sz.append(new Option("— pick a zone —",""));
+  for(const z of shelfZones) sz.append(new Option(z.code+" · "+z.name, z.code));
+  sz.value = S.dest.zone;
+  sz.addEventListener("change", () => { S.dest.zone=sz.value; S.dest.shelf=""; render(); focusScan(); });
+  f1.append(sz); d.append(f1);
+
+  const f2 = el("div","f");
+  f2.append(labelFor("dShelf","Shelf / bin code"));
+  const si = el("input","inp"); si.id="dShelf"; si.type="text"; si.placeholder="A-03-2";
+  si.value = S.dest.shelf; si.autocomplete="off";
+  si.addEventListener("change", () => { S.dest.shelf = si.value.trim().toUpperCase(); render(); focusScan(); });
+  f2.append(si); d.append(f2);
+
+  const f3 = el("div","f"); f3.style.flex="1 1 100%";
+  f3.append(labelFor(null,"Putting away to"));
+  f3.append(el("div","destnow", S.dest.shelf || S.dest.zone || "— choose a zone or scan a shelf label —"));
+  d.append(f3);
+  return d;
+}
+function destArea(){
+  const d = el("div","dest");
+  const stg = [...S.zones.values()].filter(z=>z.kind==="staging");
+  const f = el("div","f"); f.style.flex="1 1 200px";
+  f.append(labelFor("rZone","Unload into which area?"));
+  const s = el("select","inp"); s.id="rZone";
+  s.append(new Option("— pick an area —",""));
+  for(const z of stg) s.append(new Option(z.code+" · "+z.name, z.code));
+  s.value = S.recvZone;
+  s.addEventListener("change", () => { S.recvZone=s.value; render(); focusScan(); });
+  f.append(s); d.append(f);
+  const f2 = el("div","f");
+  f2.append(labelFor(null,"Receiving into"));
+  f2.append(el("div","destnow", S.recvZone || "— choose an area —"));
+  d.append(f2);
+  return d;
+}
+/** Dashboard parcel numbers are long and mostly digits (YT7638846719446,
+ *  773440998717942); shelf labels are short. Used only to tell them apart. */
+function looksLikeParcelNo(code){
+  const s = String(code || "");
+  if(s.length < 11) return false;
+  return (s.replace(/\D/g, "").length / s.length) > 0.7;
+}
+
+/** A shelf code opens with its zone letter and rack number — A1-01-03 is zone A,
+ *  rack 1 — so match on the leading zone code, longest first. */
+function zoneForShelf(code){
+  const first = String(code || "").toUpperCase().split(/[-/_. ]/)[0];
+  const z = [...S.zones.values()]
+    .filter(x => x.kind === "shelf" && x.code)
+    .sort((a, b) => b.code.length - a.code.length)
+    .find(x => first.startsWith(x.code.toUpperCase()));
+  return z ? z.code : "";
+}
+
+/** Shelf codes run {zone}{rack}-01-{level}. Catch a misread pointing at a rack or
+ *  level the zone does not have, rather than filing parcels onto a shelf that is
+ *  not there. Codes in any other shape are accepted as given. */
+function shelfOutOfRange(code){
+  const m = String(code || "").toUpperCase().match(/^([A-Z]+)(\d+)-(\d+)-(\d+)$/);
+  if(!m) return "";
+  const z = [...S.zones.values()].find(x => (x.code||"").toUpperCase() === m[1]);
+  if(!z || z.kind !== "shelf") return "";
+  const racks = Number(z.racks)||0, levels = Number(z.levels)||0;
+  const rack = +m[2], level = +m[4];
+  if(racks && (rack < 1 || rack > racks))
+    return "Zone " + z.code + " has racks 1–" + racks + ", not " + rack + " — rescan the shelf label";
+  if(levels && (level < 1 || level > levels))
+    return "Zone " + z.code + " has levels 1–" + levels + ", not " + level + " — rescan the shelf label";
+  return "";
+}
+
+/** Distinct shelf codes in use within a zone. */
+function locationsUsed(zoneCode){
+  const s = new Set();
+  for(const it of S.items.values())
+    if(it.zone === zoneCode && it.shelf) s.add(it.shelf.toUpperCase());
+  return s.size;
+}
+
+/** Shelf codes already in use, so a second scan of the same shelf is recognised. */
+function knownShelves(){
+  const m = new Map();
+  for(const it of S.items.values()) if(it.shelf) m.set(it.shelf.toUpperCase(), it.zone || "");
+  return m;
+}
+
+function labelFor(id,text){ const l=el("label","fl",text); if(id) l.htmlFor=id; return l; }
+function focusScan(){ const i=$("#scanin"); if(i){ i.focus(); i.select?.(); } }
+
+function feedPush(kind,bc,msg,undoKey){
+  S.scanFeed = [{ kind, bc, msg, t:now(), undo:!!undoKey, key:undoKey }, ...S.scanFeed].slice(0,SCANFEED_MAX);
+}
+
+async function handleScan(raw){
+  const bc = normBc(raw);
+  const id = docId(bc);
+  const known = S.items.get(id);
+
+  // While putting away, a code that is not a parcel is a shelf label. Shelves carry
+  // their own barcodes in whatever format the warehouse uses, so recognise them by
+  // what they are NOT — a dashboard parcel number — rather than by a fixed pattern.
+  if(S.mode === "shelve" && !known){
+    const up = bc.toUpperCase();
+    const zone = [...S.zones.values()].find(z => z.code.toUpperCase() === up);
+    if(zone){
+      S.dest = { zone:zone.code, shelf:"" };
+      ping(true); feedPush("ok", bc, "Destination set to zone " + zone.code);
+      render(); focusScan(); return;
+    }
+    if(!looksLikeParcelNo(up)){
+      const outOfRange = shelfOutOfRange(up);
+      if(outOfRange){
+        ping(false);
+        feedPush("bad", bc, outOfRange);
+        render(); focusScan(); return;
+      }
+      const seen = knownShelves();
+      S.dest = {
+        zone: seen.get(up) || zoneForShelf(up) || S.dest.zone,
+        shelf: up.replace(/\//g, "-"),
+      };
+      ping(true);
+      feedPush("ok", bc, (seen.has(up) ? "Shelf " : "New shelf ") + S.dest.shelf +
+                         " — scan parcels to put them here");
+      render(); focusScan(); return;
+    }
+  }
+
+  if(!known){
+    if(S.mode==="lookup"){
+      ping(false); feedPush("bad",bc,"No record with this barcode");
+      render(); focusScan(); return;
+    }
+    ping(false);
+    feedPush("warn",bc,"New barcode — fill in the details below");
+    S.pendingAdd = { barcode:bc };
+    render();
+    setTimeout(()=>{ const f=$("#qaName"); if(f) f.focus(); }, 40);
+    return;
+  }
+
+  if(S.mode==="lookup"){
+    ping(true); feedPush("ok",bc,(known.name||"Item")+" · "+STATUS[known.status].label+(known.shelf?" at "+known.shelf:""));
+    S.openId = id; render(); openDrawer(id); focusScan(); return;
+  }
+
+  if(!writable()){ ping(false); feedPush("bad",bc,"Read-only access — nothing saved"); render(); focusScan(); return; }
+
+  const to = MODES[S.mode].to;
+  if(known.status === to){
+    ping(false);
+    feedPush("warn",bc,(known.name||"Item")+" is already "+STATUS[to].label.toLowerCase());
+    render(); focusScan(); return;
+  }
+
+  let loc = null;
+  if(S.mode==="shelve"){
+    if(!S.dest.zone && !S.dest.shelf){
+      ping(false); feedPush("bad",bc,"Pick a zone first, or scan a shelf label");
+      render(); focusScan(); return;
+    }
+    loc = { zone:S.dest.zone, shelf:S.dest.shelf };
+  }
+  if(S.mode==="receive") loc = { zone:S.recvZone || "", shelf:"" };
+  if(S.mode==="released" || S.mode==="release" || S.mode==="deliver") loc = { shelf:"" };
+
+  const key = "u"+now();
+  try{
+    const res = await moveItem(id, to, loc);
+    ping(true);
+    S.undo = { key, id, before:res.before };
+    const where = S.mode==="shelve" ? " → " + (S.dest.shelf || S.dest.zone)
+                : S.mode==="receive" && S.recvZone ? " → " + S.recvZone : "";
+    feedPush("ok", bc, MODES[S.mode].verb + ": " + (known.name||"item") + where, key);
+  }catch(_){
+    ping(false); feedPush("bad",bc,"Could not save — try again");
+  }
+  render(); focusScan();
+}
+
+async function doUndo(){
+  const u = S.undo; if(!u) return;
+  const b = {...u.before}; delete b.id;
+  try{
+    await saveItem(u.id, b);
+    S.undo = null;
+    feedPush("ok", b.barcode, "Undone — back to " + STATUS[b.status].label.toLowerCase());
+    toast("Change undone.");
+  }catch(_){}
+  render(); focusScan();
+}
+
+function quickAdd(seed){
+  const c = el("div","card pad");
+  const hr = el("div","hr-t"); hr.append(el("span","sect-t","New item — not in the system yet"));
+  c.append(hr);
+  const note = el("p",null,"Scan the label and copy what it shows: item name, item ID and parcel number. Once saved, scanning this barcode again will find it straight away.");
+  note.style.cssText="margin:8px 0 12px;font-size:13px;color:var(--fg-dim)"; c.append(note);
+
+  const g = el("div","grid g2");
+  const f = {};
+  const add = (k,lab,ph,type) => {
+    const w = el("div"); const id="qa"+k[0].toUpperCase()+k.slice(1);
+    w.append(labelFor(id,lab));
+    const i = el("input","inp"); i.id=id; i.type=type||"text"; i.placeholder=ph||"";
+    if(type==="number"){ i.step="any"; i.min="0"; }
+    i.autocomplete="off"; f[k]=i; w.append(i); g.append(w); return i;
+  };
+  const bcW = el("div"); bcW.append(labelFor("qaBc","Barcode"));
+  const bcI = el("input","inp mono"); bcI.id="qaBc"; bcI.value=seed.barcode; bcI.readOnly=true;
+  bcW.append(bcI); g.append(bcW);
+  add("name","Item name","e.g. Bluetooth speaker 10W");
+  add("itemId","Item ID","from the label");
+  add("parcel","Shipment code","e.g. SH20261022301442");
+  add("customer","Customer","who it belongs to");
+  add("phone","Phone","+961 …");
+  add("weightKg","Weight (kg)","0","number");
+  add("cbm","Volume (CBM)","0","number");
+  add("cost","Charge (USD)","0","number");
+  c.append(g);
+
+  const act = el("div","row"); act.style.marginTop="13px";
+  const save = el("button","btn pri","Save & keep scanning"); save.type="button";
+  const cancel = el("button","btn","Cancel"); cancel.type="button";
+  act.append(save, cancel);
+
+  const calc = el("button","btn sm","Work out charge"); calc.type="button";
+  calc.addEventListener("click", () => {
+    const tmp = { cbm:+f.cbm.value||0, weightKg:+f.weightKg.value||0 };
+    const vv = calcCost(tmp);
+    if(S.cfg.rateMode==="manual"){ toast("Set a rate per CBM or per kg in Setup first."); return; }
+    f.cost.value = vv; toast("Charge set from your "+(S.cfg.rateMode==="cbm"?"CBM":"kg")+" rate.");
+  });
+  act.append(calc);
+  c.append(act);
+
+  const commit = async () => {
+    const it = blankItem(seed.barcode);
+    it.name = f.name.value.trim(); it.itemId = f.itemId.value.trim();
+    it.parcel = f.parcel.value.trim(); it.customer = f.customer.value.trim();
+    it.phone = f.phone.value.trim();
+    it.weightKg = +f.weightKg.value||0; it.cbm = +f.cbm.value||0; it.cost = +f.cost.value||0;
+    const mode = S.mode==="lookup" ? "receive" : S.mode;
+    it.status = MODES[mode].to || "received";
+    it.zone = mode==="shelve" ? (S.dest.zone||"") : (S.recvZone||"");
+    it.shelf = mode==="shelve" ? (S.dest.shelf||"") : "";
+    const t = now();
+    it.receivedAt = t;
+    if(it.status==="shelved") it.shelvedAt = t;
+    if(it.status==="released") it.releasedAt = t;
+    if(it.status==="delivered") it.deliveredAt = t;
+    it.hist = [{ t, by:S.meId||"", from:"", to:it.status, loc:it.shelf||it.zone||"", note:"added by scan" }];
+    try{
+      await saveItem(docId(seed.barcode), it);
+      pushFeed({ t, by:S.meId||"", bc:it.barcode, nm:it.name, from:"", to:it.status, loc:it.shelf||it.zone||"" });
+      ping(true);
+      S.pendingAdd = null;
+      feedPush("ok", it.barcode, "Added: " + (it.name||"item") + " · " + STATUS[it.status].label.toLowerCase());
+      render(); focusScan();
+    }catch(_){ ping(false); }
+  };
+  save.addEventListener("click", commit);
+  cancel.addEventListener("click", () => { S.pendingAdd=null; render(); focusScan(); });
+  g.addEventListener("keydown", e => { if(e.key==="Enter"){ e.preventDefault(); commit(); } });
+  return c;
+}
+
+/* ============================== view: stock ============================== */
+
+function vStock(v){
+  const c = counts();
+  const head = el("div","vhead");
+  const hb = el("div");
+  hb.append(el("h2",null,"Stock"));
+  hb.append(el("p",null,"Every item the warehouse knows about. Tap a row to see its full record, move it, or take payment."));
+  head.append(hb);
+  v.append(head);
+
+  const tiles = el("div","tiles");
+  const tile = (k,label,val,note,on,bar) => {
+    const b = el("button","tile"+(on?" on":"")); b.type="button"; b.dataset.k=k||"";
+    b.append(el("div","k",label), el("div","v",val));
+    if(note) b.append(el("div","n",note));
+    if(bar!=null){ const w=el("div","bar"), i=el("i"); i.style.width=Math.min(100,bar)+"%"; w.append(i); b.append(w); }
+    b.addEventListener("click", () => {
+      const cur = S.filters;
+      // the money tiles now stack on top of a status rather than replacing it
+      if(!k)                S.filters = {...cur, status:"", paid:""};
+      else if(k==="late")   S.filters = {...cur, paid: cur.paid==="late" ? "" : "late"};
+      else if(k==="unpaid") S.filters = {...cur, paid: cur.paid==="no"   ? "" : "no"};
+      else                  S.filters = {...cur, status: cur.status===k ? "" : k};
+      render();
+    });
+    return b;
+  };
+  const f = S.filters;
+  // Status tiles count the slice the other filters allow, and the money tiles
+  // count the slice the status picks out, so every figure follows the choice.
+  const st = counts(sliceBut("status"));
+  const pd = counts(sliceBut("paid"));
+  const narrowed = st.total !== c.total;
+  tiles.append(
+    tile("", "All items", nf0.format(st.total),
+         !c.total ? "nothing yet" : (narrowed ? "of " + nf0.format(c.total) : null),
+         !f.status && !f.paid),
+    tile("expected","Not here yet", nf0.format(st.expected), "still in transit", f.status==="expected"),
+    tile("received","In shipping dept", nf0.format(st.received), "not on a shelf", f.status==="received"),
+    tile("shelved","On shelves", nf0.format(st.shelved), "located", f.status==="shelved"),
+    tile("released","Out for delivery", nf0.format(st.released), "with a driver", f.status==="released"),
+    tile("delivered","Delivered", nf0.format(st.delivered), "handed over", f.status==="delivered"),
+    tile("unpaid","Unpaid", money(pd.unpaidAmt), pd.unpaid+" item"+(pd.unpaid===1?"":"s"), f.paid==="no"),
+    tile("late","Over free days", nf0.format(pd.late), "past "+S.cfg.freeDays+" days", f.paid==="late"),
+  );
+  v.append(tiles);
+
+  v.append(filterBar());
+  if(S.selected.size) v.append(bulkBar());
+
+  const rows = filtered();
+  if(!S.items.size){
+    v.append(emptyState("box", S.ready ? "No stock recorded yet" : "Loading your warehouse…",
+      S.ready ? "Open the Scan tab and scan your first barcode, or bring in a list from your online dashboard with Setup → Import."
+              : "Reading records from the shared database."));
+    return;
+  }
+  if(!rows.length){ v.append(emptyState("filter","Nothing matches these filters","Clear a filter or change the search above.")); return; }
+
+  v.append(moneyStrip(rows));
+
+  // At a few thousand items, building every row is what makes the page feel slow,
+  // so draw a window of them and only the layout this screen actually shows.
+  const shown = S.showAll ? rows : rows.slice(0, 150);
+  v.append(el("div","ctot", shown.length < rows.length
+    ? nf0.format(shown.length)+" of "+nf0.format(rows.length)+" matching shown · "+nf0.format(c.total)+" items in total"
+    : nf0.format(rows.length)+" of "+nf0.format(c.total)+" items"));
+  v.append(isPhone() ? itemCards(shown) : itemTable(shown));
+  if(shown.length < rows.length){
+    const more = el("button","btn wide","Show all "+nf0.format(rows.length)+" matching items");
+    more.type="button";
+    more.addEventListener("click", () => { S.showAll = true; render(); });
+    v.append(more);
+  }
+}
+
+/* says in words which slice the figures above describe */
+function filterLabel(){
+  const f = S.filters, bits = [];
+  if(f.status) bits.push(STATUS[f.status] ? STATUS[f.status].label : f.status);
+  if(f.zone)   bits.push("zone " + f.zone);
+  if(f.paid === "no")   bits.push("unpaid only");
+  if(f.paid === "yes")  bits.push("paid only");
+  if(f.paid === "late") bits.push("over free days");
+  if(f.parcel) bits.push("shipment " + f.parcel);
+  if(f.q.trim()) bits.push("matching “" + f.q.trim() + "”");
+  return bits.length ? bits.join(" · ") : "the whole warehouse";
+}
+
+/* What the rows on screen are worth. It reads the filtered list rather than the
+   warehouse, so picking On shelf or a zone re-states the money for that slice. */
+function moneyStrip(rows){
+  const m = moneyOf(rows);
+  const s = el("div","mstrip");
+  const cell = (k, val, cls) => {
+    const d = el("div","mcell");
+    d.append(el("span","mk",k), el("span","mv" + (cls ? " "+cls : ""), val));
+    return d;
+  };
+  s.append(cell("Parcels", nf0.format(m.n)));
+  s.append(cell("Charged", money(m.charged)));
+  s.append(cell("Settled", money(m.settled)));
+  s.append(cell("Outstanding", money(m.owed), m.owed > 0 ? "owed" : ""));
+  s.append(el("div","mnote","These figures cover " + filterLabel() + "."));
+  return s;
+}
+
+function isPhone(){
+  try{ return window.matchMedia("(max-width: 739px)").matches; }catch(_){ return false; }
+}
+
+function filterBar(){
+  const wrap = el("div","filters");
+  const chips = el("div","fchips");
+  // each chip counts what it would select under the other filters, not the warehouse
+  const c = counts(sliceBut("status"));
+  const mk = (label,on,fn,n) => {
+    const b = el("button","fchip"); b.type="button"; b.setAttribute("aria-pressed",String(on));
+    b.append(el("span",null,label));
+    if(n!=null) b.append(el("span","c",nf0.format(n)));
+    b.addEventListener("click",fn); return b;
+  };
+  chips.append(mk("All", !S.filters.status, () => { S.filters.status=""; render(); }, c.total));
+  for(const s of ORDER)
+    chips.append(mk(STATUS[s].label, S.filters.status===s,
+      () => { S.filters.status = S.filters.status===s?"":s; render(); }, c[s]||0));
+  wrap.append(chips);
+
+  const zs = el("select","mini");
+  zs.append(new Option("All zones",""));
+  for(const z of S.zones.values()) zs.append(new Option(z.code+" · "+z.name, z.code));
+  zs.value = S.filters.zone;
+  zs.setAttribute("aria-label","Filter by zone");
+  zs.addEventListener("change", () => { S.filters.zone=zs.value; render(); });
+  wrap.append(zs);
+
+  const ps = el("select","mini");
+  ps.append(new Option("Any payment",""), new Option("Unpaid only","no"), new Option("Paid only","yes"), new Option("Over free days","late"));
+  ps.value = S.filters.paid;
+  ps.setAttribute("aria-label","Filter by payment");
+  ps.addEventListener("change", () => { S.filters.paid=ps.value; render(); });
+  wrap.append(ps);
+
+  const q = el("input","mini"); q.type="search"; q.placeholder="Search…"; q.value=S.filters.q;
+  q.setAttribute("aria-label","Search stock"); q.style.minWidth="140px";
+  q.addEventListener("input", () => { S.filters.q=q.value; rerenderLists(); });
+  wrap.append(q);
+
+  if(S.filters.status||S.filters.zone||S.filters.paid||S.filters.q||S.filters.parcel){
+    const cl = el("button","btn sm","Clear"); cl.type="button";
+    cl.addEventListener("click", () => { S.filters={status:"",zone:"",paid:"",q:"",parcel:""}; render(); });
+    wrap.append(cl);
+  }
+  const ex = el("button","btn sm","Export CSV"); ex.type="button";
+  ex.addEventListener("click", () => exportCsv(filtered(), "stock"));
+  wrap.append(ex);
+  return wrap;
+}
+function rerenderLists(){
+  const keep = document.activeElement, pos = keep && keep.selectionStart;
+  render();
+  if(keep && keep.className==="mini" && keep.type==="search"){
+    const n = [...document.querySelectorAll("input.mini[type=search]")][0];
+    if(n){ n.focus(); n.value = S.filters.q; try{ n.setSelectionRange(pos,pos); }catch(_){} }
+  }
+}
+
+function bulkBar(){
+  const b = el("div","bulkbar");
+  b.append(el("span",null, S.selected.size + " selected"));
+  const act = (label,fn) => { const x=el("button","btn sm",label); x.type="button"; x.addEventListener("click",fn); b.append(x); };
+  if(writable()){
+    act("Mark paid", () => bulkPaid(true));
+    act("Mark unpaid", () => bulkPaid(false));
+    for(const s of ["received","shelved","released","delivered"])
+      act("→ "+STATUS[s].label, () => bulkMove(s));
+  }
+  act("Export", () => exportCsv([...S.selected].map(id=>S.items.get(id)).filter(Boolean), "selection"));
+  act("Clear", () => { S.selected.clear(); render(); });
+  return b;
+}
+async function bulkPaid(paid){
+  const ids=[...S.selected];
+  for(const id of ids){
+    const it=S.items.get(id); if(!it || it.paid===paid) continue;
+    const b={...it}; delete b.id; b.paid=paid; b.paidAt = paid?now():0;
+    try{ await saveItem(id,b); }catch(_){ break; }
+  }
+  toast(ids.length+" item"+(ids.length===1?"":"s")+" marked "+(paid?"paid":"unpaid")+".");
+  S.selected.clear(); render();
+}
+async function bulkMove(to){
+  const ids=[...S.selected];
+  for(const id of ids){
+    const it=S.items.get(id); if(!it || it.status===to) continue;
+    try{ await moveItem(id, to, to==="shelved" ? {zone:S.dest.zone,shelf:S.dest.shelf} : null, "bulk change"); }
+    catch(_){ break; }
+  }
+  toast(ids.length+" item"+(ids.length===1?"":"s")+" moved to "+STATUS[to].label.toLowerCase()+".");
+  S.selected.clear(); render();
+}
+
+const COLS = [
+  ["barcode","Parcel no."], ["name","Item"], ["parcel","Shipment"], ["customer","Client"],
+  ["status","Status"], ["shelf","Location"], ["receivedAt","Held"], ["cost","Charge"], ["paid","Paid"],
+];
+function itemTable(rows){
+  const sc = el("div","tscroll"), t = el("table");
+  const thead = el("thead"), tr = el("tr");
+  const th0 = el("th"); th0.style.width="30px";
+  const all = el("input"); all.type="checkbox"; all.setAttribute("aria-label","Select all shown");
+  all.checked = rows.length>0 && rows.every(r=>S.selected.has(r.id));
+  all.addEventListener("change", () => {
+    if(all.checked) rows.forEach(r=>S.selected.add(r.id)); else S.selected.clear();
+    render();
+  });
+  th0.append(all); tr.append(th0);
+  for(const [k,label] of COLS){
+    const th = el("th","sortable"); th.scope="col";
+    th.textContent = label + (S.sort.key===k ? (S.sort.dir==="asc"?" ↑":" ↓") : "");
+    th.addEventListener("click", () => {
+      if(S.sort.key===k) S.sort.dir = S.sort.dir==="asc"?"desc":"asc";
+      else S.sort = { key:k, dir:"asc" };
+      render();
+    });
+    tr.append(th);
+  }
+  thead.append(tr); t.append(thead);
+
+  const tb = el("tbody");
+  for(const it of rows){
+    const r = el("tr"); if(S.selected.has(it.id)) r.className="sel";
+    const c0 = el("td"); c0.style.width="30px";
+    const cb = el("input"); cb.type="checkbox"; cb.checked=S.selected.has(it.id);
+    cb.setAttribute("aria-label","Select "+it.barcode);
+    cb.addEventListener("click", e => e.stopPropagation());
+    cb.addEventListener("change", () => { cb.checked?S.selected.add(it.id):S.selected.delete(it.id); render(); });
+    c0.append(cb); r.append(c0);
+
+    r.append(td(el("span","bc",it.barcode)));
+    const nmc = el("div"); nmc.append(el("div","nm", it.name || "—"));
+    if(it.itemId) nmc.append(el("div","sub","ID "+it.itemId));
+    r.append(td(nmc));
+    r.append(td(el("span","mono",it.parcel||"—")));
+    const cu = el("div"); cu.append(el("div",null,it.customer||"—"));
+    if(it.phone) cu.append(el("div","sub",it.phone));
+    r.append(td(cu));
+    r.append(td(statusChip(it)));
+    r.append(td(el("span","loc", it.shelf || it.zone || "—")));
+    r.append(td(heldCell(it),"r"));
+    r.append(td(el("span","num", it.cost ? money(it.cost) : "—"),"r"));
+    r.append(td(payChip(it)));
+    r.addEventListener("click", () => openDrawer(it.id));
+    tb.append(r);
+  }
+  t.append(tb); sc.append(t); return sc;
+}
+function td(node,cls){ const d=el("td",cls||null); d.append(node); return d; }
+function statusChip(it){
+  const s = STATUS[it.status] ? it.status : "received";
+  const c = el("span","chip s-"+s);
+  c.append(el("span","dot"), el("span",null,STATUS[s].label));
+  return c;
+}
+function payChip(it){
+  if(it.status==="expected") return el("span","chip ghost","—");
+  const c = el("span","chip "+(it.paid?"pay-ok":"pay-no"), it.paid?"Paid":"Unpaid");
+  return c;
+}
+function heldCell(it){
+  const d = daysSince(it.receivedAt);
+  if(d==null || it.status==="expected") return el("span","sub","—");
+  if(it.status==="delivered"){
+    const dd = it.deliveredAt && it.receivedAt ? Math.floor((it.deliveredAt-it.receivedAt)/86400000) : d;
+    return el("span","num sub", dd+"d");
+  }
+  if(isLate(it)) return el("span","chip late", d+"d");
+  return el("span","num", d+"d");
+}
+function itemCards(rows){
+  const w = el("div","mobile-cards");
+  for(const it of rows){
+    const b = el("button","mc"); b.type="button";
+    const t = el("div","t");
+    t.append(el("b",null,it.barcode), statusChip(it));
+    b.append(t);
+    b.append(el("div","l2", it.name || "—"));
+    const m = el("div","meta");
+    const bit = (k,val) => { const s=el("span"); s.append(el("i",null,k+" "),document.createTextNode(val)); m.append(s); };
+    if(it.parcel)   bit("Shipment", it.parcel);
+    if(it.customer) bit("For", it.customer);
+    bit("At", it.shelf || it.zone || "—");
+    const d = daysSince(it.receivedAt);
+    if(d!=null && it.status!=="expected" && it.status!=="delivered") bit("Held", d+" days");
+    b.append(m);
+    const foot = el("div","meta");
+    if(it.cost) foot.append(el("span","mono", money(it.cost)));
+    foot.append(payChip(it));
+    if(isLate(it)) foot.append(el("span","chip late","over free days"));
+    b.append(foot);
+    b.addEventListener("click", () => openDrawer(it.id));
+    w.append(b);
+  }
+  return w;
+}
+
+/* ============================== view: clients ============================== */
+
+function keepFocus(id, val){
+  const n = document.getElementById(id);
+  if(!n) return;
+  n.focus(); n.value = val;
+  try{ n.setSelectionRange(val.length, val.length); }catch(_){}
+}
+
+function vClients(v){
+  const head = el("div","vhead"); const hb = el("div");
+  hb.append(el("h2",null,"Clients"));
+  hb.append(el("p",null,"One row for each client, with everything of theirs at the hub and what they still owe. Tap a client to see their own items."));
+  head.append(hb); v.append(head);
+
+  const all = clientGroups();
+  if(!all.length){
+    v.append(emptyState("box", S.ready ? "No clients yet" : "Loading clients…",
+      S.ready ? "Client names come from the Customer field on each item. Scan or import goods and this list builds itself."
+              : "Reading records from the shared database."));
+    return;
+  }
+
+  const atHub = all.filter(g => g.by.received + g.by.shelved > 0).length;
+  const owing = all.filter(g => g.owe > 0);
+  const totOwe = owing.reduce((s,g) => s + g.owe, 0);
+
+  const tiles = el("div","tiles");
+  const t = (k,vv,n,cls) => {
+    const d = el("div","tile"); d.append(el("div","k",k));
+    const b = el("div","v",vv); if(cls) b.style.color = cls; d.append(b);
+    if(n) d.append(el("div","n",n)); return d;
+  };
+  tiles.append(
+    t("Clients", nf0.format(all.length), "with goods on record"),
+    t("Goods here now", nf0.format(atHub), "clients with stock in the warehouse"),
+    t("Owing money", nf0.format(owing.length), money(totOwe)+" outstanding", owing.length ? "var(--danger)" : null),
+  );
+  v.append(tiles);
+
+  const q = (S.clientQ||"").trim().toLowerCase();
+  const rows = q ? all.filter(g =>
+    (g.cu+" "+g.phone+" "+[...g.parcels].join(" ")).toLowerCase().includes(q)) : all;
+
+  const fr = el("div","filters");
+  const qi = el("input","mini"); qi.type="search"; qi.id="clientQ";
+  qi.placeholder="Find a client, phone or parcel…"; qi.value = S.clientQ||"";
+  qi.setAttribute("aria-label","Find a client"); qi.style.minWidth="190px";
+  qi.addEventListener("input", () => { S.clientQ = qi.value; render(); keepFocus("clientQ", S.clientQ); });
+  fr.append(qi);
+  if(S.clientQ){
+    const cl = el("button","btn sm","Clear"); cl.type="button";
+    cl.addEventListener("click", () => { S.clientQ=""; render(); });
+    fr.append(cl);
+  }
+  const ex = el("button","btn sm","Export clients (CSV)"); ex.type="button";
+  ex.addEventListener("click", () => exportClients(rows));
+  fr.append(ex);
+  v.append(fr);
+
+  if(!rows.length){
+    v.append(emptyState("filter","No client matches that","Clear the search above to see everyone again."));
+    return;
+  }
+  const shown = S.showAllClients ? rows : rows.slice(0, 150);
+  v.append(el("div","ctot", shown.length < rows.length
+    ? nf0.format(shown.length)+" of "+nf0.format(rows.length)+" shown · "+nf0.format(all.length)+" clients in total"
+    : nf0.format(rows.length)+" of "+nf0.format(all.length)+" clients"));
+
+  // desktop table
+  const sc = el("div","tscroll"), tb = el("table");
+  const thead = el("thead"), htr = el("tr");
+  for(const [label,align] of [["Client",""],["Items","r"],["At hub","r"],["Not here","r"],
+                              ["Delivered","r"],["Shipments","r"],["Charged","r"],["Outstanding","r"],["Last move","r"]]){
+    const th = el("th", align==="r" ? "r" : null, label); th.scope="col";
+    if(align==="r") th.style.textAlign="right";
+    htr.append(th);
+  }
+  thead.append(htr); tb.append(thead);
+  const body = el("tbody");
+  for(const g of shown){
+    const tr = el("tr");
+    const cu = el("div");
+    cu.append(el("div","nm", g.cu));
+    if(g.phone) cu.append(el("div","sub", g.phone));
+    tr.append(td(cu));
+    tr.append(td(el("span","num", nf0.format(g.items.length)),"r"));
+    const hub = g.by.received + g.by.shelved;
+    tr.append(td(hub ? el("span","chip s-shelved", nf0.format(hub)) : el("span","sub","—"),"r"));
+    tr.append(td(g.by.expected ? el("span","chip s-expected", nf0.format(g.by.expected)) : el("span","sub","—"),"r"));
+    tr.append(td(g.by.delivered ? el("span","num", nf0.format(g.by.delivered)) : el("span","sub","—"),"r"));
+    tr.append(td(el("span","num", nf0.format(g.parcels.size)),"r"));
+    tr.append(td(el("span","num", g.cost ? money(g.cost) : "—"),"r"));
+    tr.append(td(g.owe ? el("span","chip pay-no", money(g.owe)) : el("span","chip pay-ok","Settled"),"r"));
+    tr.append(td(el("span","sub", g.last ? fmtTime(g.last) : "—"),"r"));
+    tr.addEventListener("click", () => {
+      S.filters = { status:"", zone:"", paid:"", q:g.cu, parcel:"" }; go("stock");
+    });
+    body.append(tr);
+  }
+  tb.append(body); sc.append(tb);
+  if(!isPhone()) v.append(sc);
+
+  // phone cards
+  const cards = el("div","mobile-cards");
+  for(const g of shown){
+    const b = el("button","mc"); b.type="button";
+    const top = el("div","t");
+    top.append(el("b",null,g.cu));
+    top.append(g.owe ? el("span","chip pay-no", money(g.owe)) : el("span","chip pay-ok","Settled"));
+    b.append(top);
+    if(g.phone) b.append(el("div","sub", g.phone));
+    const chips = el("div","meta");
+    const hub = g.by.received + g.by.shelved;
+    if(hub) chips.append(el("span","chip s-shelved", hub+" at hub"));
+    if(g.by.expected) chips.append(el("span","chip s-expected", g.by.expected+" not here"));
+    if(g.by.released) chips.append(el("span","chip s-released", g.by.released+" out"));
+    if(g.by.delivered) chips.append(el("span","chip s-delivered", g.by.delivered+" delivered"));
+    b.append(chips);
+    const m2 = el("div","meta");
+    const bit = (k,val) => { const s=el("span"); s.append(el("i",null,k+" "), document.createTextNode(val)); m2.append(s); };
+    bit("Parcels", nf0.format(g.items.length));
+    bit("Shipments", nf0.format(g.parcels.size));
+    if(g.cost) bit("Charged", money(g.cost));
+    b.append(m2);
+    b.addEventListener("click", () => {
+      S.filters = { status:"", zone:"", paid:"", q:g.cu, parcel:"" }; go("stock");
+    });
+    cards.append(b);
+  }
+  if(isPhone()) v.append(cards);
+  if(shown.length < rows.length){
+    const more = el("button","btn wide","Show all "+nf0.format(rows.length)+" clients");
+    more.type="button";
+    more.addEventListener("click", () => { S.showAllClients = true; render(); });
+    v.append(more);
+  }
+}
+
+async function exportClients(gs){
+  if(!gs || !gs.length){ toast("Nothing to export."); return; }
+  const head = ["Client","Phone","Parcels","Not here","In shipping dept","On shelf",
+                "Out for delivery","Delivered","Shipments","Charged USD","Outstanding USD","Last movement"];
+  const lines = [head.map(csvCell).join(",")];
+  for(const g of gs){
+    lines.push([
+      g.cu, g.phone, g.items.length, g.by.expected, g.by.received, g.by.shelved,
+      g.by.released, g.by.delivered, [...g.parcels].join(" "),
+      (g.cost||0).toFixed(2), (g.owe||0).toFixed(2),
+      g.last ? new Date(g.last).toISOString().slice(0,10) : "",
+    ].map(csvCell).join(","));
+  }
+  await offerFile("clients-"+new Date().toISOString().slice(0,10)+".csv", "﻿"+lines.join("\n"));
+}
+
+/* ============================== view: parcels ============================== */
+
+function vParcels(v){
+  const head = el("div","vhead"); const hb=el("div");
+  hb.append(el("h2",null,"Shipments"));
+  hb.append(el("p",null,"Parcels grouped by the SH shipment code they travelled under — one shipment carries many parcels. Incomplete shipments sit at the top: those still have parcels on the way."));
+  head.append(hb); v.append(head);
+
+  const gs = parcelGroups();
+  if(!gs.length){ v.append(emptyState("box","No shipments yet","Shipment codes come in with the parcels. Scan or import goods and they group themselves here.")); return; }
+
+  const inc = gs.filter(g => g.here < g.items.length).length;
+  const tiles = el("div","tiles");
+  const t = (k,vv,n) => { const d=el("div","tile"); d.append(el("div","k",k),el("div","v",vv)); if(n) d.append(el("div","n",n)); return d; };
+  tiles.append(
+    t("Shipments", nf0.format(gs.length)),
+    t("Incomplete", nf0.format(inc), "parcels still in transit"),
+    t("Complete", nf0.format(gs.length-inc), "all parcels at the hub"),
+  );
+  v.append(tiles);
+
+  for(const g of gs){
+    const full = g.here >= g.items.length;
+    const card = el("div","pcard "+(full?"full":"inc"));
+    const h = el("button","phead"); h.type="button";
+    h.setAttribute("aria-expanded", String(S.openParcels.has(g.parcel)));
+    h.append(el("span","pno", g.parcel));
+    const cu = el("span","sub2", [...g.customers].join(", ") || "no customer set");
+    cu.style.flex="1 1 120px"; cu.style.minWidth="0"; h.append(cu);
+    const pr = el("div","prog"+(full?"":" inc")); const i=el("i");
+    i.style.width = (g.items.length ? (g.here/g.items.length*100) : 0) + "%"; pr.append(i); h.append(pr);
+    h.append(el("span","chip "+(full?"pay-ok":"late"), g.here+" of "+g.items.length+" here"));
+    if(g.cost) h.append(el("span","mono", money(g.cost)));
+    if(g.unpaid) h.append(el("span","chip pay-no", money(g.unpaid)+" unpaid"));
+    h.addEventListener("click", () => {
+      S.openParcels.has(g.parcel) ? S.openParcels.delete(g.parcel) : S.openParcels.add(g.parcel);
+      render();
+    });
+    card.append(h);
+
+    if(S.openParcels.has(g.parcel)){
+      const body = el("div","pbody");
+      for(const it of g.items.slice().sort((a,b)=>ORDER.indexOf(a.status)-ORDER.indexOf(b.status))){
+        const row = el("button","pi"); row.type="button";
+        row.append(el("span","bc",it.barcode));
+        const nm = el("span",null,it.name||"—"); nm.style.cssText="flex:1 1 110px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:550";
+        row.append(nm);
+        row.append(statusChip(it));
+        row.append(el("span","loc", it.shelf||it.zone||"—"));
+        if(it.cost) row.append(el("span","mono", money(it.cost)));
+        row.append(payChip(it));
+        row.addEventListener("click", () => openDrawer(it.id));
+        body.append(row);
+      }
+      const act = el("div","pi"); act.style.cursor="default";
+      const open = el("button","btn sm","Show in Stock"); open.type="button";
+      open.addEventListener("click", () => { S.filters={status:"",zone:"",paid:"",q:"",parcel:g.parcel}; go("stock"); });
+      act.append(open);
+      if(writable() && g.unpaid){
+        const mp = el("button","btn sm pri","Mark shipment paid"); mp.type="button";
+        mp.addEventListener("click", async () => {
+          for(const it of g.items){
+            if(it.paid || it.status==="expected") continue;
+            const b={...it}; delete b.id; b.paid=true; b.paidAt=now();
+            try{ await saveItem(it.id,b); }catch(_){ break; }
+          }
+          toast("Shipment "+g.parcel+" marked paid.");
+        });
+        act.append(mp);
+      }
+      const exp = el("button","btn sm","Export"); exp.type="button";
+      exp.addEventListener("click", () => exportCsv(g.items, "parcel-"+g.parcel));
+      act.append(exp);
+      body.append(act);
+      card.append(body);
+    }
+    v.append(card);
+  }
+}
+
+/* ============================== view: zones ============================== */
+
+function vZones(v){
+  const head = el("div","vhead"); const hb=el("div");
+  hb.append(el("h2",null,"Zones"));
+  hb.append(el("p",null,"How the warehouse floor is divided. Shelf zones hold located stock; staging areas are inside the warehouse but not on shelves — the shipping department, receiving and the outbound bay."));
+  head.append(hb);
+  if(writable()){
+    const add = el("button","btn pri","Add zone"); add.type="button";
+    add.style.marginLeft="auto";
+    add.addEventListener("click", () => editZone(null));
+    head.append(add);
+  }
+  v.append(head);
+
+  if(!S.zones.size){
+    v.append(emptyState("map", S.ready?"No zones set up yet":"Loading zones…",
+      S.ready?"Add a zone for each area of your warehouse — A, B, C for shelf racks, plus the shipping department and receiving bay.":"Reading your floor plan."));
+    return;
+  }
+
+  for(const kind of ["shelf","staging"]){
+    const zs = [...S.zones.values()].filter(z=>z.kind===kind).sort((a,b)=>a.code.localeCompare(b.code));
+    if(!zs.length) continue;
+    const hr = el("div","hr-t");
+    hr.append(el("span","sect-t", kind==="shelf" ? "Shelf zones" : "Staging areas — in the warehouse, not on shelves"));
+    v.append(hr);
+    const g = el("div","zgrid");
+    for(const z of zs){
+      const n = zoneCount(z.code), cap = Number(z.capacity)||0;
+      const racks = Number(z.racks)||0, levels = Number(z.levels)||0;
+      const slots = racks * levels;
+      const used = slots ? locationsUsed(z.code) : 0;
+      const b = el("button","zcard"); b.type="button";
+      const zt = el("div","zt"); zt.append(el("span","zc",z.code), el("span","zn",z.name)); b.append(zt);
+      b.append(el("div","zv", nf0.format(n)));
+      b.append(el("div","sub2", kind==="shelf" ? "parcels on these shelves" : "parcels in this area"));
+      if(slots){
+        b.append(el("div","sub2", racks+" racks × "+levels+" levels · " +
+                                  nf0.format(used)+" of "+nf0.format(slots)+" locations in use"));
+        const pct2 = Math.min(100, used/slots*100);
+        const bar = el("div","zbar"+(pct2>=90?" hot":"")); const i=el("i");
+        i.style.width = pct2+"%"; bar.append(i); b.append(bar);
+      } else if(cap){
+        const pct = Math.min(100, n/cap*100);
+        const bar = el("div","zbar"+(kind==="staging"?" stg":"")+(pct>=90?" hot":"")); const i=el("i");
+        i.style.width = pct+"%"; bar.append(i); b.append(bar);
+      }
+      if(z.note) b.append(el("div","sub2", z.note));
+      const row = el("div","row");
+      if(writable()){
+        const e = el("button","btn sm","Edit"); e.type="button";
+        e.addEventListener("click", ev => { ev.stopPropagation(); editZone(z); });
+        row.append(e);
+      }
+      b.append(row);
+      b.addEventListener("click", () => { S.filters={status:"",zone:z.code,paid:"",q:"",parcel:""}; go("stock"); });
+      g.append(b);
+    }
+    v.append(g);
+  }
+}
+
+function editZone(z){
+  const isNew = !z;
+  const body = el("div","grid");
+  const f = {};
+  const fld = (k,lab,val,ph) => {
+    const w=el("div"); w.append(labelFor("z_"+k,lab));
+    const i=el("input","inp"); i.id="z_"+k; i.value=val??""; i.placeholder=ph||""; f[k]=i; w.append(i); body.append(w);
+  };
+  fld("code","Zone code", z?.code||"", "A");
+  fld("name","Name", z?.name||"", "Shelf rack A");
+  const kw = el("div"); kw.append(labelFor("z_kind","Type"));
+  const ks = el("select","inp"); ks.id="z_kind";
+  ks.append(new Option("Shelf zone — items get a shelf code","shelf"),
+            new Option("Staging area — inside the warehouse, no shelves","staging"));
+  ks.value = z?.kind||"shelf"; f.kind=ks; kw.append(ks); body.append(kw);
+  fld("racks","Racks", z?.racks||"", "10");
+  fld("levels","Levels per rack", z?.levels||"", "5");
+  fld("capacity","Capacity (staging areas only)", z?.capacity||"", "300");
+  fld("note","Note", z?.note||"", "e.g. heavy and bulky goods");
+
+  openModal(isNew?"Add zone":"Edit zone "+z.code, body, [
+    ...(isNew?[]:[{ label:"Delete", cls:"btn dgr", fn: async () => {
+      closeModal();
+      const n = zoneCount(z.code);
+      askConfirm("Delete zone "+z.code+"?",
+        n ? n+" item"+(n===1?" is":"s are")+" recorded in this zone. They keep the code "+z.code+" until you move them."
+          : "Nothing is stored in this zone.",
+        "Delete zone", async () => {
+          try{ await write("zones/"+z.id, () => S.db.doc("zones/"+z.id).delete()); toast("Zone deleted."); }catch(_){}
+        });
+    }}]),
+    { label:"Cancel", cls:"btn", fn:closeModal },
+    { label:isNew?"Add zone":"Save", cls:"btn pri", fn: async () => {
+      const code = f.code.value.trim().toUpperCase();
+      if(!code){ toast("Give the zone a code, like A or SHIP.","bad"); return; }
+      const id = z?.id || docId(code);
+      const b = { code, name:f.name.value.trim()||code, kind:f.kind.value,
+                  racks:+f.racks.value||0, levels:+f.levels.value||0,
+                  capacity:+f.capacity.value||0, note:f.note.value.trim() };
+      try{
+        await write("zones/"+id, () => S.db.doc("zones/"+id).set(b));
+        closeModal(); toast(isNew?"Zone "+code+" added.":"Zone saved.");
+      }catch(_){}
+    }},
+  ]);
+}
+
+/* ============================== view: money ============================== */
+
+function vMoney(v){
+  const head = el("div","vhead"); const hb=el("div");
+  hb.append(el("h2",null,"Money"));
+  hb.append(el("p",null,"What each customer owes on the goods at this hub. Charges are per item; marking an item paid records who took the payment and when."));
+  head.append(hb); v.append(head);
+
+  const items = allItems().filter(i=>i.status!=="expected");
+  const unpaid = items.filter(i=>!i.paid);
+  const tot = items.reduce((s,i)=>s+(Number(i.cost)||0),0);
+  const owe = unpaid.reduce((s,i)=>s+(Number(i.cost)||0),0);
+  const collected = tot - owe;
+
+  const top = el("div","tiles");
+  const t = (k,vv,n,cls) => { const d=el("div","tile"); d.append(el("div","k",k)); const b=el("div","v",vv); if(cls)b.style.color=cls; d.append(b); if(n) d.append(el("div","n",n)); return d; };
+  top.append(
+    t("Outstanding", money(owe), lbp(owe), "var(--danger)"),
+    t("Collected", money(collected), lbp(collected), "var(--ok)"),
+    t("Unpaid items", nf0.format(unpaid.length), "of "+nf0.format(items.length)+" at the hub"),
+    t("Billed total", money(tot), "all items at the hub"),
+  );
+  v.append(top);
+
+  if(!items.length){ v.append(emptyState("cash","Nothing to bill yet","Charges appear once items are received at the hub and given a cost.")); return; }
+
+  // per customer
+  const byCu = new Map();
+  for(const it of items){
+    const k = it.customer || "(no customer)";
+    if(!byCu.has(k)) byCu.set(k,{ cu:k, n:0, tot:0, owe:0, oldest:0, ids:[] });
+    const g=byCu.get(k); g.n++; g.tot += Number(it.cost)||0; g.ids.push(it.id);
+    if(!it.paid){ g.owe += Number(it.cost)||0; if(it.receivedAt && (!g.oldest || it.receivedAt<g.oldest)) g.oldest=it.receivedAt; }
+  }
+  const list = [...byCu.values()].sort((a,b)=>b.owe-a.owe || b.tot-a.tot);
+
+  const card = el("div","card");
+  const hr = el("div","pad"); hr.style.paddingBottom="8px";
+  const h2 = el("div","hr-t"); h2.append(el("span","sect-t","By customer"));
+  hr.append(h2); card.append(hr);
+  for(const g of list){
+    const r = el("div","mrow");
+    const cu = el("div","cu"); cu.append(document.createTextNode(g.cu));
+    const sub = el("div","sub2", g.n+" item"+(g.n===1?"":"s")+(g.oldest?" · oldest held "+daysSince(g.oldest)+" days":""));
+    cu.append(sub); r.append(cu);
+    r.append(el("span","mv", money(g.tot)));
+    if(g.owe > 0){
+      const o = el("span","chip pay-no", money(g.owe)+" due"); r.append(o);
+      if(writable()){
+        const b = el("button","btn sm pri","Take payment"); b.type="button";
+        b.addEventListener("click", () => askConfirm(
+          "Record payment from "+g.cu+"?",
+          money(g.owe)+" ("+lbp(g.owe)+") across "+g.ids.filter(id=>!S.items.get(id)?.paid).length+" item(s) will be marked paid, stamped with your name.",
+          "Mark paid", async () => {
+            for(const id of g.ids){
+              const it=S.items.get(id); if(!it||it.paid) continue;
+              const b2={...it}; delete b2.id; b2.paid=true; b2.paidAt=now();
+              try{ await saveItem(id,b2); }catch(_){ break; }
+            }
+            toast("Payment recorded for "+g.cu+".");
+          }));
+        r.append(b);
+      }
+    } else r.append(el("span","chip pay-ok","Settled"));
+    const sh = el("button","btn sm","Items"); sh.type="button";
+    sh.addEventListener("click", () => { S.filters={status:"",zone:"",paid:"",q:g.cu,parcel:""}; go("stock"); });
+    r.append(sh);
+    card.append(r);
+  }
+  v.append(card);
+
+  const act = el("div","row");
+  const ex = el("button","btn","Export unpaid list (CSV)"); ex.type="button";
+  ex.addEventListener("click", () => exportCsv(unpaid, "unpaid"));
+  act.append(ex);
+  const note = el("span","sub2","Rate used today: 1 USD = "+nf0.format(S.cfg.lbpRate)+" LL — change it in Setup.");
+  act.append(note);
+  v.append(act);
+}
+
+/* ============================== view: log ============================== */
+
+function vLog(v){
+  const head = el("div","vhead"); const hb=el("div");
+  hb.append(el("h2",null,"Activity log"));
+  hb.append(el("p",null,"Every move anyone made, newest first. The last "+FEED_MAX+" actions are kept here; each item also carries its own full history."));
+  head.append(hb); v.append(head);
+
+  if(!S.feed.length){ v.append(emptyState("clock","No activity yet","Receiving, shelving, releasing and delivering all show up here with the name of whoever did it.")); return; }
+
+  const c = el("div","card"); const f = el("div","feed"); f.style.padding="4px 14px";
+  for(const e of S.feed){
+    const row = el("div","fr ok");
+    const to = e.to && STATUS[e.to] ? e.to : "received";
+    row.append(el("div","ic","→"));
+    const bd = el("div","bd");
+    bd.append(el("b",null, e.bc || "—"));
+    const who = el("span");
+    const act = e.from ? STATUS[to].label.toLowerCase() : "added";
+    who.append(document.createTextNode((e.nm || "item") + " · " + act + (e.loc ? " at "+e.loc : "") + " · "));
+    const nmSpan = el("span"); nmSpan.dataset.uid = e.by || ""; nmSpan.textContent = nameOf(e.by);
+    who.append(nmSpan);
+    bd.append(who); row.append(bd);
+    row.append(el("time",null,fmtTime(e.t)));
+    f.append(row);
+  }
+  c.append(f); v.append(c);
+}
+
+/* ============================== view: setup ============================== */
+
+function vSetup(v){
+  const head = el("div","vhead"); const hb=el("div");
+  hb.append(el("h2",null,"Setup & data"));
+  hb.append(el("p",null,"Names, rates and storage rules, plus bringing lists in from your online dashboard and taking them out again."));
+  head.append(hb); v.append(head);
+
+  // --- settings
+  const sc = el("div","card pad");
+  const hr = el("div","hr-t"); hr.append(el("span","sect-t","Warehouse")); sc.append(hr);
+  const g = el("div","grid g2"); g.style.marginTop="11px";
+  const f = {};
+  const fld = (k,lab,val,ph,type) => {
+    const w=el("div"); w.append(labelFor("s_"+k,lab));
+    const i=el("input","inp"); i.id="s_"+k; i.value=val??""; i.placeholder=ph||"";
+    if(type){ i.type=type; i.step="any"; i.min="0"; }
+    f[k]=i; w.append(i); g.append(w);
+  };
+  fld("whName","Warehouse name", S.cfg.whName, DEFAULTS.whName);
+  fld("whSub","Subtitle", S.cfg.whSub, DEFAULTS.whSub);
+  fld("freeDays","Free storage days", S.cfg.freeDays, "14", "number");
+  fld("lbpRate","USD → LL rate", S.cfg.lbpRate, "89500", "number");
+  fld("cnyPerUsd","Yuan per 1 USD (￥)", S.cfg.cnyPerUsd, "7.1", "number");
+  const rw = el("div"); rw.append(labelFor("s_rateMode","Work out charge from"));
+  const rs = el("select","inp"); rs.id="s_rateMode";
+  rs.append(new Option("Volume — per CBM","cbm"), new Option("Weight — per kg","kg"), new Option("Enter by hand","manual"));
+  rs.value = S.cfg.rateMode; f.rateMode=rs; rw.append(rs); g.append(rw);
+  fld("ratePerCbm","Rate per CBM (USD)", S.cfg.ratePerCbm, "260", "number");
+  fld("ratePerKg","Rate per kg (USD)", S.cfg.ratePerKg, "4.5", "number");
+  sc.append(g);
+  const sa = el("div","row"); sa.style.marginTop="12px";
+  const sv = el("button","btn pri","Save settings"); sv.type="button"; sv.disabled=!writable();
+  sv.addEventListener("click", async () => {
+    try{
+      await saveCfg({
+        whName:f.whName.value.trim()||DEFAULTS.whName, whSub:f.whSub.value.trim()||DEFAULTS.whSub,
+        freeDays:+f.freeDays.value||0, lbpRate:+f.lbpRate.value||0,
+        cnyPerUsd:+f.cnyPerUsd.value||0, rateMode:f.rateMode.value,
+        ratePerCbm:+f.ratePerCbm.value||0, ratePerKg:+f.ratePerKg.value||0,
+      });
+      toast("Settings saved."); render();
+    }catch(_){}
+  });
+  sa.append(sv);
+
+  // charges were worked out at the rate in force when each item was imported,
+  // so a rate change needs them rebuilt from the original yuan figure
+  const withCny = allItems().filter(i => (Number(i.cny)||0) > 0);
+  const rc = el("button","btn","Recalculate charges from ￥"); rc.type="button";
+  rc.disabled = !writable() || !withCny.length;
+  rc.addEventListener("click", askRecalc);
+  sa.append(rc);
+  if(withCny.length)
+    sa.append(el("span","sub2", nf0.format(withCny.length)+" items carry an original ￥ amount"));
+  sc.append(sa);
+  v.append(sc);
+
+  // --- import
+  v.append(importCard());
+
+  // --- export
+  const ec = el("div","card pad");
+  const hr3 = el("div","hr-t"); hr3.append(el("span","sect-t","Take data out")); ec.append(hr3);
+  const p3 = el("p",null,"A CSV of everything, ready to open in Excel or send on. Your browser asks before saving.");
+  p3.style.cssText="margin:8px 0 12px;font-size:13px;color:var(--fg-dim)"; ec.append(p3);
+  const er = el("div","row");
+  const e1 = el("button","btn","Export all items"); e1.type="button";
+  e1.addEventListener("click", () => exportCsv(allItems(), "all-items"));
+  const e2 = el("button","btn","Export zones"); e2.type="button";
+  e2.addEventListener("click", () => exportZones());
+  er.append(e1,e2); ec.append(er);
+  v.append(ec);
+
+  // --- housekeeping
+  const hc = el("div","card pad");
+  const hr4 = el("div","hr-t"); hr4.append(el("span","sect-t","Housekeeping")); hc.append(hr4);
+  const c = counts();
+  const p4 = el("p"); p4.style.cssText="margin:8px 0 12px;font-size:13px;color:var(--fg-dim)";
+  p4.textContent = nf0.format(c.total)+" items and "+nf0.format(S.zones.size)+
+    " zones stored. The database holds about 25,000 records in total, so clear out old delivered items from time to time.";
+  hc.append(p4);
+  const hrow = el("div","row");
+  const arc = el("button","btn","Remove delivered & paid, older than 90 days"); arc.type="button";
+  arc.disabled = !writable();
+  arc.addEventListener("click", () => {
+    const cut = now() - 90*86400000;
+    const victims = allItems().filter(i => i.status==="delivered" && i.paid && i.deliveredAt && i.deliveredAt < cut);
+    if(!victims.length){ toast("Nothing is old enough to remove."); return; }
+    askConfirm("Remove "+victims.length+" old record"+(victims.length===1?"":"s")+"?",
+      "These were delivered and paid more than 90 days ago. Export them first if you need to keep them — this cannot be undone.",
+      "Remove them", async () => {
+        for(const it of victims){
+          try{ await write("items/"+it.id, () => S.db.doc("items/"+it.id).delete()); }catch(_){ break; }
+        }
+        toast(victims.length+" old records removed.");
+      });
+  });
+  hrow.append(arc);
+  if(hasDemo()){
+    const d = el("button","btn dgr","Remove example items"); d.type="button"; d.disabled=!writable();
+    d.addEventListener("click", askClearDemo); hrow.append(d);
+  }
+  hc.append(hrow);
+  v.append(hc);
+
+  // --- about the data
+  const ac = el("div","card pad");
+  const hr5 = el("div","hr-t"); hr5.append(el("span","sect-t","Where this data lives")); ac.append(hr5);
+  const ul = el("div"); ul.style.cssText="margin-top:9px;font-size:13px;color:var(--fg-dim);display:flex;flex-direction:column;gap:6px";
+  [ "Records are kept in this page's own shared database, not in your browser — so your phone and the office laptop show the same thing.",
+    "Anyone you share the link with at Contributor level or above can scan and edit. Viewers can look but not change.",
+    "This system is separate from your company dashboard. Use Import below to bring a list across; nothing syncs by itself.",
+  ].forEach(t => { const d=el("div"); d.textContent = "· " + t; ul.append(d); });
+  ac.append(ul); v.append(ac);
+}
+
+function askRecalc(){
+  const rate = Number(S.cfg.cnyPerUsd) || 0;
+  if(!rate){ toast("Set a yuan rate above and save it first.","bad"); return; }
+  const todo = allItems().filter(it => (Number(it.cny)||0) > 0);
+  if(!todo.length){ toast("No items carry an original ￥ amount."); return; }
+  const before = todo.reduce((s,i) => s + (Number(i.cost)||0), 0);
+  const after  = todo.reduce((s,i) => s + (Number(i.cny)||0) / rate, 0);
+  askConfirm(
+    "Recalculate " + nf0.format(todo.length) + " charges at ￥" + rate + " per USD?",
+    "The total goes from " + money(before) + " to " + money(after) + ". Every item holding an " +
+    "original ￥ amount is rebuilt from it, so a charge you typed over by hand would be replaced. " +
+    "Items with no ￥ amount are left alone.",
+    "Recalculate", runRecalc);
+}
+
+async function runRecalc(){
+  const rate = Number(S.cfg.cnyPerUsd) || 0;
+  if(!rate || !S.db) return;
+  const todo = allItems().filter(it => (Number(it.cny)||0) > 0);
+  if(!todo.length) return;
+
+  const prog = openProgress(todo.length, "Recalculating charges");
+  let done = 0, failed = 0, firstErr = "", idx = 0;
+  const worker = async () => {
+    while(idx < todo.length){
+      const it = todo[idx++];
+      const b = {...it};
+      delete b.id;
+      b.cost = +((Number(it.cny)||0) / rate).toFixed(2);
+      b.currency = "USD";
+      b.updatedAt = now();
+      b.updatedBy = S.meId || "";
+      try{ await S.db.doc("items/" + it.id).set(b); }
+      catch(e){
+        failed++;
+        if(!firstErr) firstErr = (e && e.code) || "error";
+        if(failed > 25) idx = todo.length;
+      }
+      done++;
+      if(done % 20 === 0 || done === todo.length) prog.set(done);
+    }
+  };
+  await Promise.all(Array.from({ length:6 }, worker));
+  prog.close();
+
+  const ok = done - failed;
+  if(ok) pushFeed({ t:now(), by:S.meId||"", bc:"Charges recalculated",
+                    nm:nf0.format(ok) + " items at ￥" + rate + " per USD",
+                    from:"", to:"", loc:"" });
+  toast(failed
+    ? nf0.format(ok) + " updated, " + failed + " failed (" + firstErr + ")."
+    : nf0.format(ok) + " charges recalculated at ￥" + rate + " per USD.", failed ? "bad" : null);
+  render();
+}
+
+function askClearDemo(){
+  const victims = allItems().filter(i=>i.demo);
+  askConfirm("Remove "+victims.length+" example item"+(victims.length===1?"":"s")+"?",
+    "These are the sample rows that came with the system. Your own records are not touched.",
+    "Remove examples", async () => {
+      for(const it of victims){
+        try{ await write("items/"+it.id, () => S.db.doc("items/"+it.id).delete()); }catch(_){ break; }
+      }
+      toast("Example items removed.");
+    });
+}
+
+/* ============================== CSV ============================== */
+
+/* Import fields. Some are stored on the item; lenCm/widCm/hgtCm derive the volume,
+   and paidAtRaw/payMethod decide whether it is paid, so they are read and discarded. */
+const FIELDS = [
+  ["barcode","Barcode / order no."], ["name","Item name"], ["clientId","Client ID"],
+  ["customer","Client name"], ["phone","Phone"], ["parcel","Shipment / parcel"],
+  ["itemId","Item ID"], ["qty","Quantity"],
+  ["weightKg","Weight (kg)"], ["cbm","Volume (CBM)"],
+  ["lenCm","Length (cm)"], ["widCm","Width (cm)"], ["hgtCm","Height (cm)"],
+  ["sizeLWH","Box size (L×W×H)"],
+  ["cny","Amount (￥)"], ["cost","Charge (USD)"], ["declared","Declared value"],
+  ["origin","Origin warehouse"], ["route","Route"],
+  ["status","Status"], ["zone","Zone"], ["shelf","Shelf / location"],
+  ["paidAtRaw","Paid at"], ["payMethod","Payment method"], ["notes","Notes"],
+];
+const ALIAS = {
+  barcode:["barcode","bar code","code","sku","tracking","trackingnumber","trackingno","awb",
+           "order number","ordernumber","order no","orderno","package tracking number","订单号","包裹单号"],
+  name:["name","item","itemname","description","desc","goods","product","productname",
+        "package item name","packageitemname","货品名","商品名","货品名英文名"],
+  clientId:["clientid","client id","customerid","customer id","userid","客户id"],
+  customer:["customer","client","consignee","receiver","customername","buyer",
+            "username","user name","用户名"],
+  phone:["phone","mobile","tel","telephone","contact","mobile phone","mobilephone","手机","电话"],
+  parcel:["parcel","parcelno","parcelnumber","parcelnum","box","carton","shipment",
+          "shipmentno","shipment name","lot"],
+  itemId:["itemid","itemno","ref","reference","itemcode"],
+  qty:["quantity","qty","package item quantity","packageitemquantity",
+       "total package item count","货品数量","商品数量"],
+  weightKg:["weight","weightkg","kg","grossweight","gw","实际重量",
+            "outbound actual weight kg","outboundactualweightkg",
+            "inbound actual weight kg","inboundactualweightkg","package weight kg","packageweightkg"],
+  cbm:["cbm","volume","m3","cubic","cubicmeter","vol","体积",
+       "outbound volume m","outboundvolumem","outbound volume",
+       "package volume m","packagevolumem","package volume"],
+  lenCm:["lengthcm","length","长"],
+  widCm:["widthcm","width","宽"],
+  hgtCm:["heightcm","height","高"],
+  sizeLWH:["package size lwh","packagesizelwh","package size","boxsize","size","dimensions","尺寸","尺寸cm"],
+  cny:["actual payment amount","actualpaymentamount","amountcny","rmb","yuan","实际支付金额"],
+  cost:["cost","price","charge","fee","freight","chargeusd","amountusd"],
+  declared:["total declared value","totaldeclaredvalue","declaredvalue",
+            "商品申报价值","申报价值"],
+  origin:["warehouse","origin warehouse","originwarehouse","发货仓"],
+  route:["route name","routename","route","line","渠道"],
+  status:["status","state","stage"],
+  zone:["zone"],
+  shelf:["shelf","location","loc","bin","rack","position",
+         "package location","packagelocation"],
+  paidAtRaw:["paid at","paidat","paidtime","付款时间"],
+  payMethod:["payment method","paymentmethod","payment","paymentstatus","paid","ispaid","settled"],
+  notes:["notes","note","remark","remarks","comment","comments",
+         "warehouse remark","warehouseremark","备注"],
+};
+/* Where a sheet has several columns a field could take, the exact header wins. */
+const PREFER = {
+  barcode:["ordernumber"], name:["packageitemname"], customer:["username"],
+  parcel:["shipment"], qty:["packageitemquantity"], weightKg:["outboundactualweightkg"],
+  cbm:["outboundvolumem"], cny:["actualpaymentamount"], shelf:["packagelocation"],
+  origin:["warehouse"], route:["routename"], notes:["warehouseremark"],
+};
+const key = s => String(s||"").toLowerCase().replace(/[^a-z0-9一-鿿]/g,"");
+
+function parseCsv(text){
+  const rows=[]; let row=[], cell="", q=false;
+  const t = String(text).replace(/\r\n?/g,"\n");
+  for(let i=0;i<t.length;i++){
+    const ch=t[i];
+    if(q){
+      if(ch==='"'){ if(t[i+1]==='"'){ cell+='"'; i++; } else q=false; }
+      else cell+=ch;
+    } else if(ch==='"'){ q=true; }
+    else if(ch===","||ch===";"||ch==="\t"){ row.push(cell); cell=""; }
+    else if(ch==="\n"){ row.push(cell); cell=""; if(row.some(c=>c.trim()!=="")) rows.push(row); row=[]; }
+    else cell+=ch;
+  }
+  row.push(cell);
+  if(row.some(c=>c.trim()!=="")) rows.push(row);
+  return rows;
+}
+function guessMap(headers){
+  const m = {}, keys = headers.map(key), taken = new Set();
+  for(const fld in PREFER){
+    for(const want of PREFER[fld]){
+      const i = keys.indexOf(key(want));
+      if(i >= 0 && !taken.has(i)){ m[fld] = i; taken.add(i); break; }
+    }
+  }
+  keys.forEach((k,i) => {
+    if(!k || taken.has(i)) return;
+    for(const fld in ALIAS){
+      if(m[fld] != null) continue;
+      if(ALIAS[fld].some(a => key(a) === k)){ m[fld] = i; taken.add(i); return; }
+    }
+  });
+  return m;
+}
+function importCard(){
+  const c = el("div","card pad");
+  const hr = el("div","hr-t"); hr.append(el("span","sect-t","Bring a list in (CSV or Excel)")); c.append(hr);
+  const p = el("p",null,"Export a list from your company dashboard and drop the file here, or paste the rows. Excel files (.xlsx) are read straight away — the first sheet is used. Existing barcodes are updated, new ones are added.");
+  p.style.cssText="margin:8px 0 12px;font-size:13px;color:var(--fg-dim)"; c.append(p);
+
+  if(!S.importRows){
+    const dz = el("div","dropzone");
+    dz.textContent = "Drop a .csv or .xlsx file here, or choose one";
+    const fi = el("input"); fi.type="file";
+    fi.accept=".csv,.txt,.xlsx,.xls,text/csv"; fi.className="sr"; fi.id="csvFile";
+    const lab = el("label","btn sm","Choose file"); lab.htmlFor="csvFile"; lab.style.marginTop="9px";
+    dz.append(el("div"), lab, fi);
+    const load = loadFile;
+    fi.addEventListener("change", () => { if(fi.files && fi.files[0]) load(fi.files[0]); });
+    dz.addEventListener("dragover", e => { e.preventDefault(); dz.classList.add("hot"); });
+    dz.addEventListener("dragleave", () => dz.classList.remove("hot"));
+    dz.addEventListener("drop", e => {
+      e.preventDefault(); dz.classList.remove("hot");
+      const file = e.dataTransfer?.files?.[0]; if(file) load(file);
+    });
+    c.append(dz);
+
+    const ta = el("textarea","inp"); ta.placeholder="…or paste CSV rows here (first row = column names)";
+    ta.style.marginTop="10px"; ta.id="csvPaste";
+    c.append(ta);
+    const b = el("button","btn","Read pasted rows"); b.type="button"; b.style.marginTop="9px";
+    b.addEventListener("click", () => { if(ta.value.trim()) takeCsv(ta.value); else toast("Paste some rows first."); });
+    c.append(b);
+    return c;
+  }
+
+  // mapping step
+  const rows = S.importRows, headers = rows[0], data = rows.slice(1);
+  const info = el("p"); info.style.cssText="margin:0 0 11px;font-size:13px;font-weight:550";
+  info.textContent = data.length + " row" + (data.length===1?"":"s") + " read. Check the columns matched correctly:";
+  c.append(info);
+
+  const ml = el("div","maplist");
+  for(const [fld,label] of FIELDS){
+    const r = el("div","maprow");
+    r.append(el("b",null,label));
+    const s = el("select","mini"); s.style.flex="1"; s.setAttribute("aria-label",label+" column");
+    s.append(new Option("— skip —",""));
+    headers.forEach((h,i) => s.append(new Option(h || ("Column "+(i+1)), String(i))));
+    s.value = S.importMap[fld]!=null ? String(S.importMap[fld]) : "";
+    s.addEventListener("change", () => {
+      if(s.value==="") delete S.importMap[fld]; else S.importMap[fld]=+s.value;
+    });
+    r.append(s); ml.append(r);
+  }
+  c.append(ml);
+
+  // what these rows mean, and where they land
+  const opt = el("div","dest"); opt.style.marginTop="13px";
+  const o1 = el("div","f"); o1.style.flex="1 1 210px";
+  o1.append(labelFor("impStatus","These rows are"));
+  const ss = el("select","inp"); ss.id="impStatus";
+  ss.append(new Option("Received — in the warehouse now","received"),
+            new Option("Still in transit from China","expected"),
+            new Option("Already on shelves","shelved"),
+            new Option("Out for delivery","released"),
+            new Option("Already delivered","delivered"));
+  ss.value = S.importStatus;
+  ss.addEventListener("change", () => { S.importStatus = ss.value; render(); });
+  o1.append(ss); opt.append(o1);
+
+  const o2 = el("div","f"); o2.style.flex="1 1 190px";
+  o2.append(labelFor("impZone","Put them in"));
+  const zz = el("select","inp"); zz.id="impZone";
+  zz.append(new Option("— no zone —",""));
+  for(const z of S.zones.values()) zz.append(new Option(z.code+" · "+z.name, z.code));
+  if(!S.importZone){
+    const stg = [...S.zones.values()].find(z => z.kind === "staging");
+    if(stg) S.importZone = stg.code;
+  }
+  zz.value = S.importZone;
+  zz.addEventListener("change", () => { S.importZone = zz.value; });
+  o2.append(zz); opt.append(o2);
+
+  const o3 = el("div","f"); o3.style.flex="1 1 100%";
+  o3.append(labelFor(null,"Only applies to new barcodes"));
+  o3.append(el("div","sub2","Items already in the system keep the status and shelf your staff scanned — an import never moves goods on the floor."));
+  opt.append(o3);
+  c.append(opt);
+
+  // money: the yuan column needs a rate to become a USD charge
+  if(S.importMap.cny != null){
+    const r = Number(S.cfg.cnyPerUsd) || 0;
+    c.append(r
+      ? banner("", "Charges convert from ￥.",
+          "￥ amounts are divided by " + r + " to give USD. Change the rate in Warehouse settings above.")
+      : banner("", "No yuan rate set.",
+          "The ￥ column is mapped but the rate is 0, so charges would import as zero. Set it in Warehouse settings above."));
+  }
+
+  const act = el("div","row"); act.style.marginTop="13px";
+  const go2 = el("button","btn pri","Import "+nf0.format(data.length)+" row"+(data.length===1?"":"s"));
+  go2.type="button";
+  go2.disabled = !writable() || S.importMap.barcode == null;
+  go2.addEventListener("click", () => runImport(headers, data));
+  const cancel = el("button","btn","Cancel"); cancel.type="button";
+  cancel.addEventListener("click", () => { S.importRows=null; S.importMap=null; render(); });
+  act.append(go2, cancel);
+  c.append(act);
+  if(S.importMap.barcode==null)
+    c.append(banner("","Barcode column needed.","Pick which column holds the barcode — it is how items are identified."));
+  return c;
+}
+function takeRows(rows){
+  const clean = (rows||[]).filter(r => Array.isArray(r) && r.some(cell => String(cell??"").trim() !== ""));
+  if(clean.length < 2){ toast("That file has no data rows.","bad"); return; }
+  S.importRows = clean; S.importMap = guessMap(clean[0]);
+  render();
+}
+function takeCsv(text){ takeRows(parseCsv(text)); }
+
+/** Reads .xlsx/.xls through SheetJS; anything else as plain text. */
+function loadFile(file){
+  if(!file) return;
+  const r = new FileReader();
+  r.onerror = () => toast("Could not read that file.","bad");
+  if(/\.xlsx?$/i.test(file.name||"")){
+    if(!window.XLSX){
+      toast("The Excel reader did not load. Open the file in Excel and use Save As → CSV.","bad");
+      return;
+    }
+    r.onload = () => {
+      try{
+        const wb = XLSX.read(new Uint8Array(r.result), { type:"array" });
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        if(!sheet){ toast("That workbook has no sheets.","bad"); return; }
+        const rows = XLSX.utils.sheet_to_json(sheet, { header:1, raw:false, defval:"" });
+        takeRows(rows.map(row => (row||[]).map(cell => cell==null ? "" : String(cell))));
+      }catch(_){
+        toast("Could not read that Excel file. Try Save As → CSV instead.","bad");
+      }
+    };
+    r.readAsArrayBuffer(file);
+    return;
+  }
+  r.onload = () => takeCsv(String(r.result));
+  r.readAsText(file);
+}
+function normStatus(s){
+  const k = key(s);
+  if(!k) return null;
+  for(const st of ORDER) if(key(STATUS[st].label)===k || st===k) return st;
+  if(/(transit|way|china|notarriv|pending|order)/.test(k)) return "expected";
+  if(/(arriv|receiv|warehouse|hub|unload|shipping)/.test(k)) return "received";
+  if(/(shelf|shelv|stored|putaway|stock)/.test(k)) return "shelved";
+  if(/(out|release|driver|dispatch|transit)/.test(k)) return "released";
+  if(/(deliver|done|complete|collect)/.test(k)) return "delivered";
+  return null;
+}
+function truthy(s){
+  const k = key(s);
+  return ["1","yes","y","true","paid","ok","done","settled","t"].includes(k);
+}
+function openProgress(total, title){
+  closeModal();
+  const scrim = el("div","scrim"); scrim.id="mscrim";
+  const m = el("div","modal"); m.id="modal";
+  m.setAttribute("role","dialog"); m.setAttribute("aria-modal","true");
+  m.append(el("h3",null,title || "Importing"));
+  const line = el("p",null,"0 of "+nf0.format(total));
+  // .prog is sized for a flex row elsewhere; pin it here or the column stretches it
+  const bar = el("div","prog"); bar.style.height = "9px"; bar.style.flex = "none";
+  const fill = el("i"); fill.style.width="0%"; fill.style.background="var(--primary)";
+  bar.append(fill);
+  const note = el("p",null,"Keep this page open until it finishes. Rows are saved as they go, so nothing is lost if you stop.");
+  note.style.fontSize="12px";
+  m.append(line, bar, note);
+  document.body.append(scrim, m);
+  return {
+    set(n){
+      line.textContent = nf0.format(n)+" of "+nf0.format(total);
+      fill.style.width = Math.round(n / Math.max(1,total) * 100) + "%";
+    },
+    close: closeModal,
+  };
+}
+
+async function runImport(headers, data){
+  const m = S.importMap;
+  if(m.barcode == null){ toast("Pick the barcode column first.","bad"); return; }
+  if(!S.db){ toast("No connection to the database.","bad"); return; }
+
+  const asStatus = STATUS[S.importStatus] ? S.importStatus : "received";
+  const asZone = S.importZone || "";
+  const rate = Number(S.cfg.cnyPerUsd) || 0;
+  const num = s => { const n = parseFloat(String(s).replace(/[^\d.-]/g,"")); return isFinite(n) ? n : 0; };
+
+  const jobs = new Map();   // keyed by doc id, so a repeated order number collapses to one write
+  let noBarcode = 0, dupes = 0;
+
+  for(const row of data){
+    const cell = fld => (m[fld] != null && row[m[fld]] != null) ? String(row[m[fld]]).trim() : "";
+    const bc = normBc(cell("barcode"));
+    if(!bc){ noBarcode++; continue; }
+    const id = docId(bc);
+    if(jobs.has(id)) dupes++;
+
+    const prev = jobs.get(id) || (S.items.get(id)
+      ? (() => { const x = {...S.items.get(id)}; delete x.id; return x; })() : null);
+    const b = prev || blankItem(bc);
+    const txt = (fld, target) => { const v = cell(fld); if(v) b[target||fld] = v; };
+
+    txt("name"); txt("clientId"); txt("customer"); txt("parcel");
+    txt("itemId"); txt("origin"); txt("route"); txt("notes");
+    // some exports lose the country code and leave a leading dash
+    const ph = cell("phone").replace(/^[-\s]+/, "").trim();
+    if(ph) b.phone = ph;
+    if(cell("shelf")) b.shelf = cell("shelf").toUpperCase();
+    if(cell("zone"))  b.zone  = cell("zone").toUpperCase();
+    if(cell("qty"))      b.qty      = num(cell("qty"));
+    if(cell("weightKg")) b.weightKg = num(cell("weightKg"));
+    if(cell("declared")) b.declared = num(cell("declared"));
+
+    // Volume: an explicit CBM column if present, otherwise derived from the box dimensions,
+    // which avoids the chargeable column meaning CBM on sea routes and kilos on air.
+    let cbm = num(cell("cbm"));
+    const L = num(cell("lenCm")), W = num(cell("widCm")), H = num(cell("hgtCm"));
+    if(L && W && H){
+      b.dims = L + "×" + W + "×" + H + " cm";
+      if(!cbm) cbm = +((L * W * H) / 1e6).toFixed(6);
+    } else {
+      // other exports give the box as one "51*30*16" string instead of three columns
+      const parts = cell("sizeLWH").split(/[*x×X,\s]+/).map(num).filter(n => n > 0);
+      if(parts.length === 3){
+        b.dims = parts[0] + "×" + parts[1] + "×" + parts[2] + " cm";
+        if(!cbm) cbm = +((parts[0] * parts[1] * parts[2]) / 1e6).toFixed(6);
+      }
+    }
+    if(cbm) b.cbm = cbm;
+
+    // Charge: yuan converted at the rate in Setup, unless an explicit USD column is mapped.
+    const cny = num(cell("cny"));
+    if(cny){ b.cny = cny; if(rate > 0) b.cost = +(cny / rate).toFixed(2); }
+    if(cell("cost")) b.cost = num(cell("cost"));
+
+    // Paid: a real "paid at" date means settled; cash on delivery means not yet.
+    const paidAt = cell("paidAtRaw"), pm = cell("payMethod");
+    if(pm) b.payMethod = pm;
+    if(m.paidAtRaw != null) b.paid = !!paidAt;
+    if(!paidAt && /cash on delivery|\bcod\b|unpaid|not paid/i.test(pm)) b.paid = false;
+    else if(m.paidAtRaw == null && /\bpaid\b|settled|prepaid/i.test(pm)) b.paid = true;
+    else if(m.paidAtRaw == null && m.payMethod != null && truthy(pm)) b.paid = true;
+
+    if(!prev){
+      b.demo = false;
+      b.status = asStatus;
+      if(m.status != null){ const st = normStatus(cell("status")); if(st) b.status = st; }
+      if(!b.zone && asZone) b.zone = asZone;
+      const t = now();
+      if(b.status !== "expected" && !b.receivedAt) b.receivedAt = t;
+      if(b.status === "shelved")   b.shelvedAt = t;
+      if(b.status === "released")  b.releasedAt = t;
+      if(b.status === "delivered") b.deliveredAt = t;
+      b.hist = [{ t, by:S.meId||"", from:"", to:b.status,
+                  loc:b.shelf||b.zone||"", note:"imported from dashboard export" }];
+    }
+    b.updatedAt = now();
+    b.updatedBy = S.meId || "";
+    jobs.set(id, b);
+  }
+
+  const list = [...jobs.entries()];
+  if(!list.length){ toast("No row in that file had a barcode.","bad"); return; }
+
+  // Write with a little concurrency — one write per document, several documents at once.
+  const prog = openProgress(list.length);
+  let done = 0, failed = 0, firstErr = "", idx = 0;
+  const worker = async () => {
+    while(idx < list.length){
+      const [id, body] = list[idx++];
+      try{ await S.db.doc("items/" + id).set(body); }
+      catch(e){
+        failed++;
+        if(!firstErr) firstErr = (e && e.code) || "error";
+        if(failed > 25 || firstErr === "quota_exceeded") idx = list.length;
+      }
+      done++;
+      if(done % 15 === 0 || done === list.length) prog.set(done);
+    }
+  };
+  await Promise.all(Array.from({ length:6 }, worker));
+  prog.close();
+
+  const ok = done - failed;
+  S.importRows = null; S.importMap = null;
+  pushFeed({ t:now(), by:S.meId||"", bc:"Dashboard import",
+             nm:ok + " item" + (ok===1?"":"s") + " loaded",
+             from:"", to:asStatus, loc:asZone });
+
+  const extra = [];
+  if(noBarcode) extra.push(noBarcode + " row" + (noBarcode===1?"":"s") + " had no barcode");
+  if(dupes)     extra.push(dupes + " repeated order number" + (dupes===1?"":"s") + " merged");
+  if(failed)    extra.push(failed + " failed (" + firstErr + ")");
+  toast(nf0.format(ok) + " items imported" + (extra.length ? " — " + extra.join(", ") : "."),
+        failed ? "bad" : null);
+  render();
+}
+
+function csvCell(v){
+  const s = v==null ? "" : String(v);
+  return /[",;\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s;
+}
+function itemsToCsv(items){
+  const cols = ["barcode","name","itemId","clientId","parcel","customer","phone","status","zone","shelf",
+                "qty","weightKg","cbm","dims","cny","cost","currency","paid","payMethod","origin","route",
+                "receivedAt","shelvedAt","deliveredAt","daysHeld","notes"];
+  const head = ["Barcode","Item name","Item ID","Client ID","Shipment","Client","Phone","Status","Zone","Shelf",
+                "Quantity","Weight kg","CBM","Box size","Amount CNY","Charge USD","Currency","Paid","Payment method",
+                "Shipped from","Route","Received","Shelved","Delivered","Days held","Notes"];
+  const lines = [head.map(csvCell).join(",")];
+  for(const it of items){
+    lines.push(cols.map(c => {
+      if(c==="status") return csvCell(STATUS[it.status]?.label || it.status);
+      if(c==="paid") return csvCell(it.paid ? "Yes" : "No");
+      if(c==="daysHeld"){ const d=daysSince(it.receivedAt); return csvCell(d==null?"":d); }
+      if(/At$/.test(c)) return csvCell(it[c] ? new Date(it[c]).toISOString().slice(0,10) : "");
+      return csvCell(it[c]);
+    }).join(","));
+  }
+  return lines.join("\n");
+}
+async function exportCsv(items, tag){
+  if(!items || !items.length){ toast("Nothing to export."); return; }
+  const name = (tag||"items").replace(/[^A-Za-z0-9_-]+/g,"-").toLowerCase() +
+               "-" + new Date().toISOString().slice(0,10) + ".csv";
+  await offerFile(name, "﻿" + itemsToCsv(items));
+}
+async function exportZones(){
+  const zs = [...S.zones.values()];
+  if(!zs.length){ toast("No zones to export."); return; }
+  const lines = [["Code","Name","Type","Capacity","Items now","Note"].join(",")];
+  for(const z of zs) lines.push([z.code,z.name,z.kind,z.capacity||"",zoneCount(z.code),z.note||""].map(csvCell).join(","));
+  await offerFile("zones-"+new Date().toISOString().slice(0,10)+".csv", "﻿"+lines.join("\n"));
+}
+async function offerFile(filename, data){
+  if(!S.dl){ toast("Saving files is not available in this view.","bad"); return; }
+  try{
+    await S.dl.save({ filename, data });
+    toast("Saved "+filename+".");
+  }catch(e){
+    const c = e && e.code;
+    if(c==="declined") return;
+    if(c==="rate_limited") toast("Wait a moment, then try the export again.","bad");
+    else toast("Could not save that file.","bad");
+  }
+}
+
+/* ============================== drawer ============================== */
+
+function openDrawer(id){
+  S.openId = id;
+  closeDrawer(true);
+  const it = S.items.get(id);
+  if(!it) return;
+
+  const scrim = el("div","scrim"); scrim.id="scrim";
+  scrim.addEventListener("click", () => closeDrawer());
+  const d = el("aside","drawer"); d.id="drawer";
+  d.setAttribute("role","dialog"); d.setAttribute("aria-modal","true"); d.setAttribute("aria-label","Item "+it.barcode);
+
+  const h = el("div","dhead");
+  const dt = el("div","dt");
+  dt.append(el("b",null,it.barcode));
+  dt.append(el("span",null, it.name || "No name recorded"));
+  const chips = el("div","row"); chips.style.marginTop="7px";
+  chips.append(statusChip(it), payChip(it));
+  if(isLate(it)) chips.append(el("span","chip late","over "+S.cfg.freeDays+" free days"));
+  if(it.demo) chips.append(el("span","chip ghost","example row"));
+  dt.append(chips);
+  h.append(dt);
+  const x = el("button","iconbtn"); x.type="button"; x.setAttribute("aria-label","Close");
+  x.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M18 6 6 18M6 6l12 12"/></svg>';
+  x.addEventListener("click", () => closeDrawer());
+  h.append(x);
+  d.append(h);
+
+  const body = el("div","dbody");
+
+  // facts
+  const dl = el("dl","kv");
+  const kv = (k,v2) => { dl.append(el("dt",null,k)); dl.append(el("dd",null,v2)); };
+  kv("Item ID", it.itemId || "—");
+  kv("Shipment", it.parcel || "—");
+  kv("Client", it.customer || "—");
+  if(it.clientId) kv("Client ID", it.clientId);
+  kv("Phone", it.phone || "—");
+  kv("Location", it.shelf || it.zone || "not placed");
+  if(it.origin) kv("Shipped from", it.origin);
+  if(it.route) kv("Route", it.route);
+  if(Number(it.qty)||0) kv("Quantity", nf0.format(it.qty));
+  kv("Weight", (Number(it.weightKg)||0) ? nf3.format(it.weightKg)+" kg" : "—");
+  kv("Volume", (Number(it.cbm)||0) ? nf3.format(it.cbm)+" CBM" : "—");
+  if(it.dims) kv("Box size", it.dims);
+  kv("Charge", (Number(it.cost)||0) ? money(it.cost)+"  ·  "+lbp(it.cost) : "—");
+  if(Number(it.cny)||0) kv("Dashboard amount", "￥" + nf2.format(it.cny));
+  if(it.payMethod) kv("Payment method", it.payMethod);
+  if(Number(it.declared)||0) kv("Declared value", nf2.format(it.declared));
+  kv("Received", fmtDate(it.receivedAt));
+  if(it.shelvedAt)   kv("Shelved", fmtDate(it.shelvedAt));
+  if(it.releasedAt)  kv("Released", fmtDate(it.releasedAt));
+  if(it.deliveredAt) kv("Delivered", fmtDate(it.deliveredAt));
+  const held = daysSince(it.receivedAt);
+  if(held!=null && it.status!=="expected") kv("Days held", held + (isLate(it) ? "  (over free days)" : ""));
+  if(it.notes) kv("Notes", it.notes);
+  body.append(dl);
+
+  // move
+  if(writable()){
+    body.append(el("hr","sep"));
+    const hr = el("div","hr-t"); hr.append(el("span","sect-t","Move this item")); body.append(hr);
+    const mg = el("div","row");
+    for(const s of ORDER){
+      if(s===it.status) continue;
+      const b = el("button","btn sm", "→ "+STATUS[s].label); b.type="button";
+      b.addEventListener("click", async () => {
+        if(s==="shelved"){ closeDrawer(); shelveDialog(id); return; }
+        try{ await moveItem(id, s, s==="released"||s==="delivered" ? {shelf:""} : null); toast("Moved to "+STATUS[s].label.toLowerCase()+"."); openDrawer(id); }catch(_){}
+      });
+      mg.append(b);
+    }
+    body.append(mg);
+
+    // payment
+    body.append(el("hr","sep"));
+    const hr2 = el("div","hr-t"); hr2.append(el("span","sect-t","Payment")); body.append(hr2);
+    const pr = el("div","row");
+    const pb = el("button", "btn sm "+(it.paid?"":"pri"), it.paid?"Mark unpaid":"Mark paid "+(it.cost?money(it.cost):""));
+    pb.type="button";
+    pb.addEventListener("click", async () => {
+      const b={...it}; delete b.id; b.paid=!it.paid; b.paidAt = b.paid?now():0;
+      try{ await saveItem(id,b); toast(b.paid?"Marked paid.":"Marked unpaid."); openDrawer(id); }catch(_){}
+    });
+    pr.append(pb);
+    body.append(pr);
+  }
+
+  // history
+  body.append(el("hr","sep"));
+  const hr3 = el("div","hr-t"); hr3.append(el("span","sect-t","History")); body.append(hr3);
+  const hs = el("div","hist");
+  const hist = it.hist || [];
+  if(!hist.length) hs.append(el("div","sub2","Nothing recorded yet."));
+  for(const e of hist){
+    const r = el("div","hi");
+    r.append(el("div","ht", fmtTime(e.t)));
+    const b = el("div","hb");
+    b.append(el("b",null, (e.from ? STATUS[e.from]?.label+" → " : "Added as ") + (STATUS[e.to]?.label || e.to)));
+    const s = el("span");
+    const nmS = el("span"); nmS.dataset.uid = e.by||""; nmS.textContent = nameOf(e.by);
+    s.append(nmS);
+    if(e.loc) s.append(document.createTextNode(" · "+e.loc));
+    if(e.note) s.append(document.createTextNode(" · "+e.note));
+    b.append(s); r.append(b); hs.append(r);
+  }
+  body.append(hs);
+  d.append(body);
+
+  const foot = el("div","dfoot");
+  if(writable()){
+    const ed = el("button","btn pri","Edit details"); ed.type="button";
+    ed.addEventListener("click", () => { closeDrawer(); editItem(id); });
+    foot.append(ed);
+    const del = el("button","btn dgr","Delete"); del.type="button";
+    del.addEventListener("click", () => {
+      closeDrawer();
+      askConfirm("Delete this record?", it.barcode+(it.name?" — "+it.name:"")+" will be removed for good. The goods themselves are not affected.",
+        "Delete", async () => {
+          try{ await write("items/"+id, () => S.db.doc("items/"+id).delete()); toast("Record deleted."); }catch(_){}
+        });
+    });
+    foot.append(del);
+  }
+  const cl = el("button","btn","Close"); cl.type="button";
+  cl.style.marginLeft="auto";
+  cl.addEventListener("click", () => closeDrawer());
+  foot.append(cl);
+  d.append(foot);
+
+  document.body.append(scrim, d);
+  resolveProfiles(hist.map(e=>e.by).filter(Boolean));
+  x.focus();
+}
+function closeDrawer(silent){
+  $("#drawer")?.remove(); $("#scrim")?.remove();
+  if(!silent) S.openId = null;
+}
+
+function shelveDialog(id){
+  const it = S.items.get(id); if(!it) return;
+  const body = el("div","grid");
+  const shelfZones = [...S.zones.values()].filter(z=>z.kind==="shelf");
+  const w1 = el("div"); w1.append(labelFor("sv_z","Zone"));
+  const zs = el("select","inp"); zs.id="sv_z";
+  zs.append(new Option("— pick a zone —",""));
+  for(const z of shelfZones) zs.append(new Option(z.code+" · "+z.name, z.code));
+  zs.value = it.zone || S.dest.zone || "";
+  w1.append(zs); body.append(w1);
+  const w2 = el("div"); w2.append(labelFor("sv_s","Shelf / bin code"));
+  const si = el("input","inp"); si.id="sv_s"; si.placeholder="A-03-2"; si.value = it.shelf || "";
+  w2.append(si); body.append(w2);
+
+  openModal("Put "+(it.name||it.barcode)+" on a shelf", body, [
+    { label:"Cancel", cls:"btn", fn:closeModal },
+    { label:"Put away", cls:"btn pri", fn: async () => {
+      const zone = zs.value, shelf = si.value.trim().toUpperCase();
+      if(!zone && !shelf){ toast("Pick a zone or type a shelf code.","bad"); return; }
+      try{ await moveItem(id,"shelved",{zone,shelf}); closeModal(); toast("Shelved at "+(shelf||zone)+"."); openDrawer(id); }catch(_){}
+    }},
+  ]);
+  setTimeout(()=>zs.focus(),30);
+}
+
+function editItem(id){
+  const it = S.items.get(id); if(!it) return;
+  const body = el("div","grid g2");
+  const f = {};
+  const fld = (k,lab,ph,type) => {
+    const w=el("div"); w.append(labelFor("e_"+k,lab));
+    const i = el("input","inp"); i.id="e_"+k; i.value = it[k]??""; i.placeholder=ph||"";
+    if(type){ i.type=type; i.step="any"; }
+    f[k]=i; w.append(i); body.append(w);
+  };
+  fld("name","Item name","from the label");
+  fld("itemId","Item ID","from the label");
+  fld("parcel","Shipment code","SH…");
+  fld("customer","Customer","");
+  fld("phone","Phone","+961 …");
+  fld("weightKg","Weight (kg)","0","number");
+  fld("cbm","Volume (CBM)","0","number");
+  fld("cost","Charge (USD)","0","number");
+  const nw = el("div"); nw.style.gridColumn="1 / -1";
+  nw.append(labelFor("e_notes","Notes"));
+  const nt = el("textarea","inp"); nt.id="e_notes"; nt.value = it.notes||"";
+  f.notes=nt; nw.append(nt); body.append(nw);
+
+  openModal("Edit "+it.barcode, body, [
+    { label:"Work out charge", cls:"btn sm", fn: () => {
+      if(S.cfg.rateMode==="manual"){ toast("Set a CBM or kg rate in Setup first."); return; }
+      f.cost.value = calcCost({ cbm:+f.cbm.value||0, weightKg:+f.weightKg.value||0 });
+    }},
+    { label:"Cancel", cls:"btn", fn:closeModal },
+    { label:"Save", cls:"btn pri", fn: async () => {
+      const b = {...it}; delete b.id;
+      b.name=f.name.value.trim(); b.itemId=f.itemId.value.trim(); b.parcel=f.parcel.value.trim();
+      b.customer=f.customer.value.trim(); b.phone=f.phone.value.trim(); b.notes=f.notes.value.trim();
+      b.weightKg=+f.weightKg.value||0; b.cbm=+f.cbm.value||0; b.cost=+f.cost.value||0;
+      try{ await saveItem(id,b); closeModal(); toast("Saved."); openDrawer(id); }catch(_){}
+    }},
+  ]);
+  setTimeout(()=>f.name.focus(),30);
+}
+
+/* ============================== modal ============================== */
+
+function openModal(title, bodyNode, actions){
+  closeModal();
+  const scrim = el("div","scrim"); scrim.id="mscrim";
+  scrim.addEventListener("click", closeModal);
+  const m = el("div","modal"); m.id="modal";
+  m.setAttribute("role","dialog"); m.setAttribute("aria-modal","true");
+  m.append(el("h3",null,title));
+  m.append(bodyNode);
+  const act = el("div","mact");
+  for(const a of actions){
+    const b = el("button", a.cls || "btn", a.label); b.type="button";
+    b.addEventListener("click", a.fn); act.append(b);
+  }
+  m.append(act);
+  document.body.append(scrim, m);
+}
+function closeModal(){ $("#modal")?.remove(); $("#mscrim")?.remove(); }
+function askConfirm(title, text, confirmLabel, fn){
+  const p = el("p",null,text);
+  openModal(title, p, [
+    { label:"Cancel", cls:"btn", fn:closeModal },
+    { label:confirmLabel, cls:"btn dgr", fn: async () => { closeModal(); await fn(); } },
+  ]);
+}
+
+/* ============================== empty state ============================== */
+
+const ICONS = {
+  barcode:'<path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 8v8M11 8v8M15 8v8"/>',
+  box:'<path d="M21 8 12 3 3 8v8l9 5 9-5V8Z"/><path d="m3 8 9 5 9-5M12 13v8"/>',
+  map:'<path d="M3 6v15l6-3 6 3 6-3V3l-6 3-6-3-6 3Z"/><path d="M9 3v15M15 6v15"/>',
+  cash:'<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/>',
+  clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/>',
+  filter:'<path d="M3 5h18l-7 8v6l-4-2v-4L3 5Z"/>',
+};
+function emptyState(icon, title, text){
+  const d = el("div","empty");
+  const ic = el("div","eic");
+  ic.innerHTML = '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'+(ICONS[icon]||ICONS.box)+'</svg>';
+  d.append(ic, el("h3",null,title), el("p",null,text));
+  return d;
+}
+
+/* ===================== first load from the bundled export ===================== */
+/* The dashboard export ships as a file beside this page. Anything in it that the
+   database does not already hold can be written in one pass; barcodes already
+   present are left exactly as the floor last scanned them. */
+
+/* A bare relative URL resolves against the page's own address, which is not
+   guaranteed to sit at the artifact root, so try the obvious candidates and
+   report what happened instead of failing quietly. */
+async function loadSeedManifest(){
+  const tries = ["seed-items.json", "./seed-items.json", "/seed-items.json"];
+  const notes = [];
+  for(const u of tries){
+    try{
+      const r = await fetch(u);
+      if(!r.ok){ notes.push(u + " → HTTP " + r.status); continue; }
+      const arr = await r.json();
+      if(!Array.isArray(arr) || !arr.length){ notes.push(u + " → no records"); continue; }
+      S.seed = arr.filter(d => d && d._id);
+      S.seedErr = "";
+      recountSeed();
+      render();
+      return;
+    }catch(e){
+      notes.push(u + " → " + ((e && e.message) || "blocked"));
+    }
+  }
+  S.seed = null; S.seedPending = 0;
+  S.seedErr = notes.join(" · ");
+  render();
+}
+
+function seedErrCard(){
+  const b = el("div","banner");
+  b.append(el("b",null,"Could not read the bundled export."));
+  b.append(el("span",null," " + S.seedErr));
+  const again = el("button","btn sm","Try again"); again.type="button";
+  again.addEventListener("click", () => { S.seedErr=""; render(); loadSeedManifest(); });
+  b.append(again);
+  return b;
+}
+
+function recountSeed(){
+  if(!S.seed){ S.seedPending = 0; return; }
+  let n = 0;
+  for(const d of S.seed) if(!S.items.has(d._id)) n++;
+  S.seedPending = n;
+}
+
+function seedCard(){
+  const b = el("div","banner");
+  b.append(el("b",null, nf0.format(S.seedPending) + " item" + (S.seedPending===1?"":"s") +
+                        " from your dashboard export are ready to load."));
+  // a bundle may already carry locations, so say what is actually in this one
+  const pend = S.seed ? S.seed.filter(d => !S.items.has(d._id)) : [];
+  const located = pend.filter(d => d.status === "shelved" && d.shelf).length;
+  b.append(el("span",null, located
+    ? " " + nf0.format(located) + " of them were found on a shelf by the floor scan and go in at" +
+      " that location; the rest go in as in the warehouse. Barcodes already here are left untouched."
+    : " They go in as received in the shipping department, with charges converted from ￥." +
+      " Barcodes already here are left untouched."));
+  const go = el("button","btn sm pri", S.seedBusy ? "Loading…" : "Load now");
+  go.type = "button";
+  go.disabled = S.seedBusy;
+  go.addEventListener("click", runSeed);
+  b.append(go);
+  return b;
+}
+
+async function runSeed(){
+  if(!S.seed || S.seedBusy || !S.db) return;
+  const todo = S.seed.filter(d => !S.items.has(d._id));
+  if(!todo.length){ recountSeed(); render(); return; }
+
+  S.seedBusy = true; render();
+  const prog = openProgress(todo.length);
+  let done = 0, failed = 0, firstErr = "", idx = 0;
+  const worker = async () => {
+    while(idx < todo.length){
+      const d = todo[idx++];
+      const body = {...d};
+      delete body._id;
+      try{ await S.db.doc("items/" + d._id).set(body); }
+      catch(e){
+        failed++;
+        if(!firstErr) firstErr = (e && e.code) || "error";
+        if(failed > 25 || firstErr === "quota_exceeded") idx = todo.length;
+      }
+      done++;
+      if(done % 20 === 0 || done === todo.length) prog.set(done);
+    }
+  };
+  await Promise.all(Array.from({ length:6 }, worker));
+  prog.close();
+  S.seedBusy = false;
+
+  const ok = done - failed;
+  if(ok) pushFeed({ t:now(), by:S.meId||"", bc:"Dashboard import",
+                    nm:nf0.format(ok) + " items loaded", from:"", to:"received", loc:"SHIP" });
+  toast(failed
+    ? nf0.format(ok) + " loaded, " + failed + " failed (" + firstErr + ")."
+    : nf0.format(ok) + " items loaded into the warehouse.", failed ? "bad" : null);
+  render();
+}
+
+/* ---------------------------- bulk updates ----------------------------
+   A bundled list of changes to parcels that already exist: a shelf found by
+   the floor scan, a status that moved on in the dashboard, or both. Each
+   entry carries only the fields it means to change, so a parcel's client,
+   charge and paid state are never touched by a pass like this. An entry that
+   already matches the record is skipped, which makes a re-run after an
+   interrupted load cost only what is left.
+
+   Entry shape: { _id, shelf?, zone?, status?, label?, note? } */
+async function loadUpdates(){
+  for(const u of ["updates.json", "./updates.json", "/updates.json"]){
+    try{
+      const r = await fetch(u);
+      if(!r.ok) continue;
+      const arr = await r.json();
+      if(!Array.isArray(arr) || !arr.length) continue;
+      S.ups = arr.filter(d => d && d._id &&
+        (d.shelf !== undefined || d.zone !== undefined || d.status));
+      recountUps();
+      render();
+      return;
+    }catch(_){}
+  }
+  S.ups = null; S.upPending = 0;
+}
+
+function upTodo(){
+  if(!S.ups) return [];
+  return S.ups.filter(d => {
+    const it = S.items.get(d._id);
+    if(!it) return false;                                   // nothing to update
+    if(d.shelf  !== undefined && it.shelf  !== d.shelf) return true;
+    if(d.zone   !== undefined && it.zone   !== d.zone)  return true;
+    if(d.status && STATUS[d.status] && it.status !== d.status) return true;
+    return false;
+  });
+}
+
+function recountUps(){ S.upPending = upTodo().length; }
+
+/* every entry in a bundle carries the same label, so the first one names the job */
+function upLabel(){
+  const d = (S.ups || []).find(x => x.label);
+  return d ? d.label : "bundled change";
+}
+
+function upCard(){
+  const b = el("div","banner");
+  b.append(el("b",null, nf0.format(S.upPending) + " parcel" + (S.upPending===1?"":"s") +
+                        " are waiting on a bundled update."));
+  b.append(el("span",null, " " + upLabel() + ". Only the location and status change —" +
+                           " clients, charges and paid status are left alone."));
+  const go = el("button","btn sm pri", S.upBusy ? "Applying…" : "Apply updates");
+  go.type = "button";
+  go.disabled = S.upBusy;
+  go.addEventListener("click", runUpdates);
+  b.append(go);
+  return b;
+}
+
+async function runUpdates(){
+  if(S.upBusy || !S.db) return;
+  const todo = upTodo();
+  if(!todo.length){ recountUps(); render(); return; }
+
+  S.upBusy = true; render();
+  const prog = openProgress(todo.length, "Applying updates");
+  let done = 0, failed = 0, firstErr = "", idx = 0;
+  const t = now();
+  const worker = async () => {
+    while(idx < todo.length){
+      const d = todo[idx++];
+      const it = S.items.get(d._id);
+      if(!it){ done++; continue; }
+      const b = {...it};
+      delete b.id;
+      const from = b.status;
+      if(d.shelf !== undefined){
+        b.shelf = d.shelf;
+        // fall back to the label's own leading letter if zones are not set up yet
+        b.zone  = d.shelf ? (zoneForShelf(d.shelf) ||
+                             (/^[A-Z]/.test(d.shelf) ? d.shelf[0] : b.zone)) : "";
+      }
+      if(d.zone !== undefined) b.zone = d.zone;
+      if(d.status && STATUS[d.status]){
+        b.status = d.status;
+        if(b.status !== "expected" && !b.receivedAt) b.receivedAt = t;
+        if(b.status === "shelved")   b.shelvedAt   = t;
+        if(b.status === "released")  b.releasedAt  = t;
+        if(b.status === "delivered") b.deliveredAt = t;
+      }
+      b.updatedAt = t;
+      b.updatedBy = S.meId || "";
+      b.hist = [{ t, by:S.meId||"", from, to:b.status,
+                  loc:b.shelf||b.zone||"", note:d.note || "bundled update" },
+                ...(it.hist||[])].slice(0,HIST_MAX);
+      try{ await S.db.doc("items/" + d._id).set(b); }
+      catch(e){
+        failed++;
+        if(!firstErr) firstErr = (e && e.code) || "error";
+        if(failed > 25 || firstErr === "quota_exceeded") idx = todo.length;
+      }
+      done++;
+      if(done % 20 === 0 || done === todo.length) prog.set(done);
+    }
+  };
+  await Promise.all(Array.from({ length:6 }, worker));
+  prog.close();
+  S.upBusy = false;
+
+  const ok = done - failed;
+  if(ok) pushFeed({ t:now(), by:S.meId||"", bc:upLabel(),
+                    nm:nf0.format(ok) + " parcels updated", from:"", to:"", loc:"" });
+  toast(failed
+    ? nf0.format(ok) + " updated, " + failed + " failed (" + firstErr + ")."
+    : nf0.format(ok) + " parcels updated.", failed ? "bad" : null);
+  render();
+}
+
+/* ============================== boot ============================== */
+
+function wireChrome(){
+  $("#fab").addEventListener("click", () => go("scan"));
+  $("#setupBtn").addEventListener("click", () => go("setup"));
+  const bb = $("#beepBtn");
+  bb.addEventListener("click", () => {
+    S.beep = !S.beep;
+    bb.setAttribute("aria-pressed", String(S.beep));
+    try{ localStorage.setItem("ch.beep", S.beep?"1":"0"); }catch(_){}
+    if(S.beep) ping(true);
+  });
+  try{ const b = localStorage.getItem("ch.beep"); if(b==="0"){ S.beep=false; bb.setAttribute("aria-pressed","false"); } }catch(_){}
+
+  const q = $("#quick");
+  q.addEventListener("input", () => { S.filters.q = q.value; if(S.tab!=="stock"){ S.tab="stock"; renderTabs(); } render(); q.focus(); });
+  q.addEventListener("keydown", e => {
+    if(e.key!=="Enter") return;
+    const v2 = normBc(q.value); if(!v2) return;
+    const hit = S.items.get(docId(v2)) || allItems().find(i => i.barcode.toLowerCase()===v2.toLowerCase());
+    if(hit) openDrawer(hit.id);
+  });
+
+  document.addEventListener("keydown", e => {
+    if(e.key==="Escape"){ closeModal(); closeDrawer(); return; }
+    const tag = (e.target && e.target.tagName) || "";
+    if(/INPUT|TEXTAREA|SELECT/.test(tag)) return;
+    if(e.key==="/"){ e.preventDefault(); go("scan"); return; }
+    const i = "12345678".indexOf(e.key);
+    if(i >= 0 && TABS[i]){ e.preventDefault(); go(TABS[i][0]); }
+  });
+
+  // the table/card swap is decided at build time, so redraw when the breakpoint is crossed
+  let wasPhone = isPhone();
+  window.addEventListener("resize", () => {
+    const p = isPhone();
+    if(p !== wasPhone){ wasPhone = p; render(); }
+  });
+
+  try{
+    const h = location.hash.replace(/^#/,"");
+    if(TABS.some(t => t[0]===h)) S.tab = h;
+  }catch(_){}
+}
+
+function applyItems(snap){
+  const m = new Map();
+  snap.docs.forEach(d => {
+    if(!d.exists) return;
+    const v = d.data() || {};
+    const status = STATUS[v.status] ? v.status : "received";
+    m.set(d.id, { ...v, id:d.id, status });
+  });
+  S.items = m;
+  recountSeed();
+  recountUps();
+  if(!S.recvZone){
+    const stg = [...S.zones.values()].find(z => z.kind==="staging");
+    if(stg) S.recvZone = stg.code;
+  }
+  render();
+  if(S.openId && S.items.has(S.openId) && $("#drawer")) openDrawer(S.openId);
+}
+
+async function boot(){
+  wireChrome();
+  render();
+
+  const db = await window.claude?.use?.("db").catch(()=>null);
+  const user = await window.claude?.use?.("user").catch(()=>null);
+  S.dl = await window.claude?.use?.("downloads").catch(()=>null);
+
+  if(user){
+    S.user = user;
+    try{
+      const me = await user.me();
+      S.meId = me.id || null;
+      if(me.id){
+        const w = $("#who"); w.hidden = false;
+        $("#whoAv").src = me.avatarUrl; $("#whoNm").textContent = me.name || "You";
+      }
+    }catch(_){}
+    try{ S.canWrite = await user.can("data.write"); }catch(_){ S.canWrite = null; }
+  }
+
+  if(!db){
+    S.ready = false;
+    render();
+    const m = $("#main");
+    m.textContent = "";
+    const v = el("section","view");
+    v.append(banner("ro","This view cannot reach the warehouse database.",
+      "Open the artifact from your Claude account — signed out, or in a preview, records cannot be read or saved."));
+    v.append(emptyState("box","No connection to your records",
+      "The scan station, zones and reports all read from the shared database. Once you open this page while signed in, your data appears here."));
+    m.append(v);
+    return;
+  }
+
+  S.db = db; S.ready = true;
+
+  db.collection("items").onSnapshot(applyItems, e => {
+    if(e.code==="revoked" || e.code==="not_granted") toast("Access to the records ended.","bad");
+    else toast("Lost the live connection to stock. Reload to reconnect.","bad");
+  });
+  db.collection("zones").onSnapshot(snap => {
+    const m = new Map();
+    snap.docs.forEach(d => { if(!d.exists) return; const v=d.data()||{}; m.set(d.id, {...v, id:d.id, code:v.code||d.id}); });
+    S.zones = m;
+    if(!S.recvZone){ const stg=[...m.values()].find(z=>z.kind==="staging"); if(stg) S.recvZone=stg.code; }
+    if(!S.dest.zone){ const sh=[...m.values()].find(z=>z.kind==="shelf"); if(sh) S.dest.zone=sh.code; }
+    render();
+  }, ()=>{});
+  db.doc("meta/settings").onSnapshot(snap => {
+    S.cfg = { ...DEFAULTS, ...(snap.exists ? snap.data() : {}) };
+    render();
+  }, ()=>{});
+  db.doc("meta/feed").onSnapshot(snap => {
+    const d = snap.exists ? snap.data() : null;
+    S.feed = Array.isArray(d?.entries) ? d.entries : [];
+    render();
+  }, ()=>{});
+
+  loadSeedManifest();
+  loadUpdates();
+  if(S.tab==="scan") setTimeout(focusScan, 300);
+}
+
+boot();
+})();
+</script>

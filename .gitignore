@@ -1,0 +1,32 @@
+# ---------------------------------------------------------------------------
+# Customer data. Never commit any of this.
+#
+# These files hold names, mobile numbers, client IDs, declared values, charges
+# and payment status for thousands of ChinaHub customers. A private repository
+# is one mis-click away from being public, so the data stays off GitHub
+# entirely rather than relying on the repo staying private.
+# ---------------------------------------------------------------------------
+*.csv
+*.xlsx
+*.xlsm
+*.xls
+
+# dashboard exports and app data bundles
+bundle/
+seed/
+export*/
+*-export*/
+
+# anything the scripts write
+out/
+reports/
+
+# ---------------------------------------------------------------------------
+# Noise
+# ---------------------------------------------------------------------------
+node_modules/
+Thumbs.db
+desktop.ini
+.DS_Store
+*.log
+*.tmp
