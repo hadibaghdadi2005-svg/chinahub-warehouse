@@ -231,6 +231,17 @@ select.inp{appearance:none;background-image:linear-gradient(45deg,transparent 49
 .lm{font-size:11.5px;color:var(--fg-faint)}
 .lp{margin-left:auto;font-weight:600;font-size:13.5px}
 
+/* ---------- lane table ---------- */
+.lanetbl{display:flex;flex-direction:column;gap:6px}
+.lanehd,.lanerow{display:grid;grid-template-columns:1.2fr 1.4fr .8fr .7fr .6fr auto;gap:7px;align-items:center}
+.lanehd>div{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--fg-dim)}
+.lanerow .inp{min-height:38px;padding:6px 9px;font-size:13.5px}
+.lanerow select.inp{background-position:calc(100% - 14px) 16px,calc(100% - 8px) 16px}
+@media (max-width:760px){
+  .lanehd{display:none}
+  .lanerow{grid-template-columns:1fr 1fr;gap:6px;padding:10px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface-2)}
+}
+
 /* ---------- toasts ---------- */
 .toasts{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(18px + env(safe-area-inset-bottom,0px));z-index:90;display:flex;flex-direction:column;gap:8px;width:min(440px,calc(100vw - 32px))}
 .toast{
@@ -313,6 +324,12 @@ const S = {
   custPage: 0,
   custPageSize: 50,
   custTotal: 0,
+
+  /* setup */
+  cfgDraft: null,      /* edits in progress; nothing is written until Save */
+  cfgSaving: false,
+  laneCover: null,     /* how many parcels each lane would take */
+  coverBusy: false,
 
   /* scan station */
   zones: [],
@@ -496,6 +513,7 @@ function shell(view) {
         if (!S.cfg) loadCfg();
         if (!S.customers) loadCustomers();
       }
+      if (t.id === "setup" && !S.cfg) loadCfg();
     };
     tabs.append(b);
   }
@@ -516,6 +534,9 @@ function visibleTabs() {
   /* A scanner is not shown Money, and would get nothing from it anyway: every
      function behind it refuses them. */
   if (sees_money()) t.push({ id: "money", label: "Money" });
+  /* Office may read the rates — they are behind every charge — but only an
+     admin may change them, which the screen itself makes plain. */
+  if (sees_money()) t.push({ id: "setup", label: "Setup" });
   if (isAdmin()) t.push({ id: "staff", label: "Staff" });
   return t;
 }
@@ -1542,6 +1563,470 @@ async function loadCfg() {
   render();
 }
 
+/* ----------------------------------------------------------------- setup --- */
+/* Rates, storage rules and the floor plan. Office may look — the figures are
+   the ones behind every charge, and hiding them from the people taking money
+   would be unhelpful — but only an admin may change anything, and that is the
+   database's rule, not this screen's. The controls are disabled for office
+   because an enabled button that silently does nothing is worse than no
+   button. */
+
+const DEFAULT_CFG = {
+  whName: "ChinaHub Warehouse", whSub: "China → Lebanon · consolidation hub",
+  currency: "USD", lbpRate: 89500, freeDays: 14, cnyPerUsd: 6.1,
+  rateMode: "cbm", ratePerCbm: 450, ratePerKg: 14.5, longStayDays: 90,
+  lanes: [],
+};
+
+function vSetup() {
+  const v = el("section");
+  const head = el("div", "vhead");
+  const h = el("div");
+  h.append(el("h2", null, "Setup"));
+  h.append(el("div", "sub", isAdmin()
+    ? "Rates, storage rules and the floor plan."
+    : "Rates, storage rules and the floor plan. Only an admin can change these."));
+  head.append(h);
+  v.append(head);
+
+  if (!S.cfg) {
+    const e = el("div", "empty");
+    e.append(el("span", "spin"));
+    e.append(el("div", null, "Loading the settings…"));
+    v.append(e);
+    return v;
+  }
+  if (!isAdmin())
+    v.append(banner(null, "You can see these but not change them",
+      "Rates and the floor plan are an admin's to set."));
+
+  /* The draft is what the inputs are bound to, so a half-finished edit
+     survives a re-render and nothing is written until Save. */
+  if (!S.cfgDraft) S.cfgDraft = { ...DEFAULT_CFG, ...S.cfg };
+  const d = S.cfgDraft;
+  const ro = !isAdmin();
+
+  const card = el("div", "card pad");
+  const sec = t => {
+    const hr = el("div", "hr-t");
+    hr.append(el("span", "sect-t", t));
+    card.append(hr);
+  };
+  const grid = () => {
+    const g = el("div", "g2");
+    g.style.marginTop = "10px";
+    card.append(g);
+    return g;
+  };
+  const fld = (g, k, label, hint, type) => {
+    const w = el("label", "field");
+    w.append(el("span", null, label));
+    const i = el("input", "inp");
+    i.value = d[k] == null ? "" : d[k];
+    i.disabled = ro;
+    if (type === "number") { i.type = "number"; i.step = "any"; i.min = "0"; }
+    i.oninput = () => { d[k] = type === "number" ? i.value : i.value; };
+    w.append(i);
+    if (hint) w.append(el("div", "sub2", hint));
+    g.append(w);
+  };
+
+  sec("Warehouse");
+  let g = grid();
+  fld(g, "whName", "Name");
+  fld(g, "whSub", "Subtitle");
+
+  sec("Storage rules");
+  g = grid();
+  fld(g, "freeDays", "Free storage days",
+    "After this, a parcel counts as over its free time.", "number");
+  fld(g, "longStayDays", "“Here too long” after (days)",
+    "The pile worth chasing.", "number");
+
+  sec("Currency");
+  g = grid();
+  fld(g, "lbpRate", "1 USD in Lebanese pounds", "Used only for display.", "number");
+  fld(g, "cnyPerUsd", "Yuan per 1 USD", "What the dashboard's ￥ figures are converted at.", "number");
+
+  sec("Fallback rate");
+  g = grid();
+  const mw = el("label", "field");
+  mw.append(el("span", null, "Work a charge out from"));
+  const ms = el("select", "inp");
+  for (const [val, lab] of [["cbm", "Volume — per CBM"], ["kg", "Weight — per kg"],
+                            ["manual", "Enter it by hand"]]) {
+    const o = el("option", null, lab);
+    o.value = val;
+    if ((d.rateMode || "cbm") === val) o.selected = true;
+    ms.append(o);
+  }
+  ms.disabled = ro;
+  ms.onchange = () => { d.rateMode = ms.value; };
+  mw.append(ms);
+  mw.append(el("div", "sub2", "Used only when no lane below matches."));
+  g.append(mw);
+  fld(g, "ratePerCbm", "Rate per CBM (USD)", null, "number");
+  fld(g, "ratePerKg", "Rate per kg (USD)", null, "number");
+
+  card.append(lanesSection());
+  v.append(card);
+
+  const acts = el("div", "row");
+  acts.style.marginTop = "14px";
+  const save = el("button", "btn pri", S.cfgSaving ? "Saving…" : "Save settings");
+  save.disabled = ro || !!S.cfgSaving;
+  save.onclick = saveCfg;
+  acts.append(save);
+  if (!ro) {
+    const undo = el("button", "btn", "Discard changes");
+    undo.onclick = () => { S.cfgDraft = null; S.laneCover = null; render(); };
+    acts.append(undo);
+  }
+  v.append(acts);
+
+  v.append(zonesSection());
+  return v;
+}
+
+function lanesSection() {
+  const wrap = el("div");
+  const hr = el("div", "hr-t");
+  hr.append(el("span", "sect-t", "Price per lane"));
+  wrap.append(hr);
+  const p = el("div", "sub2");
+  p.style.margin = "8px 0 10px";
+  p.textContent = "A parcel is matched on what its route says, and the most specific match " +
+    "wins — “Air Cargo Hk” beats “Air Cargo”, whatever order they are in. A price of 0 " +
+    "means the lane is ignored and the fallback rate above is used instead.";
+  wrap.append(p);
+
+  const d = S.cfgDraft;
+  if (!Array.isArray(d.lanes)) d.lanes = [];
+  const ro = !isAdmin();
+
+  const tbl = el("div", "lanetbl");
+  const hd = el("div", "lanehd");
+  for (const t of ["Lane", "Route contains", "Priced by", "USD", "Parcels", ""])
+    hd.append(el("div", null, t));
+  tbl.append(hd);
+
+  d.lanes.forEach((L, i) => {
+    const row = el("div", "lanerow");
+    const mk = (key, ph, type) => {
+      const inp = el("input", "inp");
+      inp.value = L[key] == null ? "" : L[key];
+      inp.placeholder = ph || "";
+      inp.disabled = ro;
+      if (type === "number") { inp.type = "number"; inp.step = "any"; inp.min = "0"; }
+      inp.oninput = () => { L[key] = inp.value; if (key === "match") S.laneCover = null; };
+      row.append(inp);
+      return inp;
+    };
+    mk("label", "name it");
+    mk("match", "Air Cargo Hk");
+    const bs = el("select", "inp");
+    for (const [val, lab] of [["kg", "per kg"], ["cbm", "per CBM"]]) {
+      const o = el("option", null, lab);
+      o.value = val;
+      if ((L.basis === "cbm" ? "cbm" : "kg") === val) o.selected = true;
+      bs.append(o);
+    }
+    bs.disabled = ro;
+    bs.onchange = () => { L.basis = bs.value; };
+    row.append(bs);
+    mk("price", "0", "number");
+
+    /* What this lane would actually take. Absent means none — the database
+       only returns the lanes that matched something. */
+    const cov = S.laneCover ? (S.laneCover[i] || 0) : null;
+    const c = el("div", "mono num");
+    c.textContent = cov == null ? "—" : nf0.format(cov);
+    if (cov === 0) { c.style.color = "var(--warn)"; c.title = "matches nothing"; }
+    row.append(c);
+
+    const del = el("button", "btn sm", "Remove");
+    del.type = "button";
+    del.disabled = ro;
+    del.onclick = () => { d.lanes.splice(i, 1); S.laneCover = null; render(); };
+    row.append(del);
+    tbl.append(row);
+  });
+  wrap.append(tbl);
+
+  if (S.laneCover && S.laneCover["-1"] != null)
+    wrap.append(banner(Number(S.laneCover["-1"]) ? "warn" : null,
+      nf0.format(S.laneCover["-1"]) + " parcels match no lane at all",
+      Number(S.laneCover["-1"])
+        ? "Those fall back to the rate above. Add a lane for them, or leave them to it."
+        : "Every parcel is covered."));
+
+  const row = el("div", "row");
+  row.style.marginTop = "9px";
+  const add = el("button", "btn sm", "Add a lane");
+  add.type = "button";
+  add.disabled = ro;
+  add.onclick = () => {
+    d.lanes.push({ label: "", match: "", basis: "kg", price: 0 });
+    S.laneCover = null;
+    render();
+  };
+  row.append(add);
+  const chk = el("button", "btn sm", S.coverBusy ? "Counting…" : "Count what each lane takes");
+  chk.type = "button";
+  chk.disabled = !!S.coverBusy;
+  chk.onclick = checkLaneCoverage;
+  row.append(chk);
+  wrap.append(row);
+  return wrap;
+}
+
+async function checkLaneCoverage() {
+  S.coverBusy = true; render();
+  const lanes = (S.cfgDraft && S.cfgDraft.lanes) || [];
+  const { data, error } = await S.sb.rpc("lane_coverage", { p_lanes: lanes });
+  S.coverBusy = false;
+  if (error) { toast("Could not count the lanes — " + error.message, "bad"); render(); return; }
+  const by = {};
+  for (const r of (data || [])) by[r.idx] = Number(r.matched) || 0;
+  /* A lane that matched nothing is simply absent, so fill the gaps with zero
+     rather than leaving them looking un-counted. */
+  lanes.forEach((_, i) => { if (by[i] == null) by[i] = 0; });
+  if (by["-1"] == null) by["-1"] = 0;
+  S.laneCover = by;
+  render();
+}
+
+async function saveCfg() {
+  if (!isAdmin()) return;
+  const d = S.cfgDraft;
+  const num = (v, fallback) => {
+    const x = Number(v);
+    return Number.isFinite(x) && x >= 0 ? x : fallback;
+  };
+  const body = {
+    ...S.cfg,
+    whName: String(d.whName || "").trim() || DEFAULT_CFG.whName,
+    whSub: String(d.whSub || "").trim(),
+    currency: "USD",
+    freeDays: Math.round(num(d.freeDays, 14)),
+    longStayDays: Math.round(num(d.longStayDays, 90)),
+    lbpRate: num(d.lbpRate, 89500),
+    cnyPerUsd: num(d.cnyPerUsd, 6.1),
+    rateMode: ["cbm", "kg", "manual"].includes(d.rateMode) ? d.rateMode : "cbm",
+    ratePerCbm: num(d.ratePerCbm, 0),
+    ratePerKg: num(d.ratePerKg, 0),
+    lanes: (d.lanes || [])
+      .map(L => ({
+        label: String(L.label || "").trim(),
+        match: String(L.match || "").trim(),
+        basis: L.basis === "cbm" ? "cbm" : "kg",
+        price: num(L.price, 0),
+      }))
+      .filter(L => L.match || L.label),
+  };
+
+  S.cfgSaving = true; render();
+  const { data, error } = await S.sb.from("settings")
+    .update({ data: body, updated_at: new Date().toISOString() })
+    .eq("id", 1).select("data");
+  S.cfgSaving = false;
+
+  if (error) { toast("Could not save — " + error.message, "bad"); render(); return; }
+  /* An update the rules disallow does not fail, it changes nothing — so what
+     came back is checked rather than assumed. */
+  if (!data || !data.length) {
+    toast("Nothing was saved — only an admin may change the settings.", "bad");
+    render();
+    return;
+  }
+  S.cfg = data[0].data;
+  S.cfgDraft = null;
+  S.stats = null; S.money = null;   /* free days and the rate feed those */
+  toast("Settings saved", "ok");
+  render();
+}
+
+/* ----------------------------------------------------------------- zones --- */
+function zonesSection() {
+  const card = el("div", "card pad");
+  card.style.marginTop = "18px";
+  const hr = el("div", "hr-t");
+  hr.append(el("span", "sect-t", "Floor plan"));
+  card.append(hr);
+  const p = el("div", "sub2");
+  p.style.margin = "8px 0 10px";
+  p.textContent = "Shelf zones have racks and levels, and a scan is refused if it points " +
+    "past them. Staging areas just hold things.";
+  card.append(p);
+
+  const list = el("div", "list");
+  for (const z of S.zones) {
+    const li = el("div", "li");
+    const m = el("div", "li-m");
+    const nm = el("div", "li-nm");
+    nm.append(el("span", "zc", z.code));
+    nm.append(el("span", null, z.label || z.code));
+    if (z.kind === "staging") nm.append(el("span", "chip", "staging"));
+    m.append(nm);
+    const bits = [];
+    if (z.kind === "shelf" && z.racks && z.levels)
+      bits.push(z.racks + " racks × " + z.levels + " levels");
+    if (z.capacity) bits.push("fits " + nf0.format(z.capacity));
+    if (z.note) bits.push(z.note);
+    m.append(el("div", "li-s", bits.join("  ·  ") || "—"));
+    li.append(m);
+    if (isAdmin()) {
+      const e = el("button", "btn sm", "Edit");
+      e.onclick = () => askZone(z);
+      li.append(e);
+    }
+    list.append(li);
+  }
+  card.append(list);
+
+  if (isAdmin()) {
+    const row = el("div", "row");
+    row.style.marginTop = "10px";
+    const add = el("button", "btn sm", "Add a zone");
+    add.onclick = () => askZone(null);
+    row.append(add);
+    card.append(row);
+  }
+  return card;
+}
+
+function askZone(z) {
+  const isNew = !z;
+  const scrim = el("div", "scrim");
+  const m = el("form", "modal");
+  m.append(el("h3", null, isNew ? "Add a zone" : "Zone " + z.code));
+  const err = el("div");
+  err.style.marginTop = "10px";
+  m.append(err);
+
+  const f = {};
+  const fld = (k, label, val, ph, type, hint) => {
+    const w = el("label", "field");
+    w.append(el("span", null, label));
+    const i = el("input", "inp");
+    i.value = val == null ? "" : val;
+    i.placeholder = ph || "";
+    if (type === "number") { i.type = "number"; i.min = "0"; i.step = "1"; }
+    if (k === "code" && !isNew) i.disabled = true;
+    f[k] = i;
+    w.append(i);
+    if (hint) w.append(el("div", "sub2", hint));
+    m.append(w);
+    return i;
+  };
+  fld("code", "Code", z && z.code, "A", null,
+    isNew ? "Short, and the start of every shelf label in it — A1-01-03 is zone A."
+          : "A zone's code cannot change: the parcels on its shelves refer to it.");
+  fld("label", "Name", z && z.label, "Zone A");
+
+  const kw = el("label", "field");
+  kw.append(el("span", null, "Type"));
+  const ks = el("select", "inp");
+  for (const [val, lab] of [["shelf", "Shelf zone — parcels get a shelf code"],
+                            ["staging", "Staging area — inside the warehouse, no shelves"]]) {
+    const o = el("option", null, lab);
+    o.value = val;
+    if ((z ? z.kind : "shelf") === val) o.selected = true;
+    ks.append(o);
+  }
+  kw.append(ks);
+  m.append(kw);
+
+  fld("racks", "Racks", z && z.racks, "10", "number", "Shelf zones only.");
+  fld("levels", "Levels per rack", z && z.levels, "5", "number");
+  fld("capacity", "Capacity", z && z.capacity, "300", "number", "Staging areas only.");
+  fld("note", "Note", z && z.note, "heavy and bulky goods");
+
+  const acts = el("div", "row");
+  acts.style.marginTop = "4px";
+  const go = el("button", "btn pri", isNew ? "Add it" : "Save");
+  go.type = "submit";
+  const no = el("button", "btn", "Cancel");
+  no.type = "button";
+  no.onclick = () => scrim.remove();
+  acts.append(go, no);
+  if (!isNew) {
+    const del = el("button", "btn dng", "Delete");
+    del.type = "button";
+    del.style.marginLeft = "auto";
+    del.onclick = () => removeZone(z, scrim, err);
+    acts.append(del);
+  }
+  m.append(acts);
+
+  m.addEventListener("submit", async ev => {
+    ev.preventDefault();
+    const code = String(f.code.value || "").trim().toUpperCase();
+    if (!code) {
+      err.replaceChildren(banner("bad", "A code is needed", "Even one letter will do."));
+      return;
+    }
+    const kind = ks.value;
+    const n = v => { const x = parseInt(v, 10); return Number.isFinite(x) && x > 0 ? x : null; };
+    const body = {
+      code,
+      label: String(f.label.value || "").trim() || code,
+      kind,
+      racks: kind === "shelf" ? n(f.racks.value) : null,
+      levels: kind === "shelf" ? n(f.levels.value) : null,
+      capacity: n(f.capacity.value) || 0,
+      note: String(f.note.value || "").trim() || null,
+      sort: z ? z.sort : (S.zones.length + 1),
+    };
+    go.disabled = true; no.disabled = true;
+    const q = isNew
+      ? S.sb.from("zones").insert(body).select("code")
+      : S.sb.from("zones").update(body).eq("code", z.code).select("code");
+    const { data, error } = await q;
+    go.disabled = false; no.disabled = false;
+    if (error) {
+      err.replaceChildren(banner("bad", "Could not save the zone",
+        /duplicate|unique/i.test(error.message)
+          ? "There is already a zone with that code." : error.message));
+      return;
+    }
+    if (!data || !data.length) {
+      err.replaceChildren(banner("bad", "Nothing was saved",
+        "Only an admin may change the floor plan."));
+      return;
+    }
+    scrim.remove();
+    toast(isNew ? "Zone " + code + " added" : "Zone " + code + " saved", "ok");
+    S.zoneStats = null;
+    loadZones();
+  });
+
+  scrim.append(m);
+  scrim.addEventListener("click", e => { if (e.target === scrim) scrim.remove(); });
+  document.body.append(scrim);
+}
+
+async function removeZone(z, scrim, err) {
+  /* A zone with parcels in it should not vanish under them. */
+  const { count } = await S.sb.from("parcels_view")
+    .select("barcode", { count: "exact", head: true }).eq("zone", z.code);
+  if (count) {
+    err.replaceChildren(banner("bad", "Zone " + z.code + " still has " +
+      nf0.format(count) + " parcel" + (count === 1 ? "" : "s") + " in it",
+      "Move them somewhere else first, then delete the zone."));
+    return;
+  }
+  const { error } = await S.sb.from("zones").delete().eq("code", z.code);
+  if (error) {
+    err.replaceChildren(banner("bad", "Could not delete it", error.message));
+    return;
+  }
+  scrim.remove();
+  toast("Zone " + z.code + " deleted", "ok");
+  S.zoneStats = null;
+  loadZones();
+}
+
 /* ----------------------------------------------------------------- staff --- */
 function vStaff() {
   const v = el("section");
@@ -1792,6 +2277,7 @@ function render() {
   if (!S.session) { app.replaceChildren(vSignIn()); return; }
   if (!S.me) { app.replaceChildren(vNoAccess()); return; }
   const view = S.tab === "staff" && isAdmin() ? vStaff()
+             : S.tab === "setup" && sees_money() ? vSetup()
              : S.tab === "money" && sees_money() ? vMoney()
              : S.tab === "stock" ? vStock()
              : S.tab === "zones" ? vZones()
@@ -1832,6 +2318,7 @@ async function boot() {
       S.filters = { status: "", zone: "", paid: "" };
       S.money = null; S.cfg = null; S.customers = null;
       S.custSearch = ""; S.custPage = 0; S.custTotal = 0;
+      S.cfgDraft = null; S.laneCover = null;
       if (S.session) await loadMe();
       render();
       if (S.me) { loadZones(); loadStats(); }

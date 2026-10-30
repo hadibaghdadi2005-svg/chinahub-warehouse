@@ -209,6 +209,43 @@ mod += `
       .map(c => c.textContent).join(" "), cls:"" };
   } catch (e) { out["payment-dialog"] = { ok:false, err:e && e.message }; }
 
+  // setup — office may look, only an admin may change
+  S.tab = "setup";
+  S.cfg = {
+    whName:"ChinaHub Warehouse", whSub:"China → Lebanon · consolidation hub",
+    freeDays:14, longStayDays:90, lbpRate:89500, cnyPerUsd:6.1,
+    rateMode:"cbm", ratePerCbm:450, ratePerKg:14.5,
+    lanes:[
+      { label:"Air · Hong Kong", match:"Air Cargo Hk", basis:"kg", price:16.5 },
+      { label:"Air · Guangzhou", match:"Air Cargo LB", basis:"kg", price:14.5 },
+      { label:"Clothes", match:"Clothes", basis:"cbm", price:850 },
+    ],
+  };
+  S.cfgDraft = null;
+  S.me = { id:"u3", name:"Hadi", role:"admin", active:true };
+  build("setup-admin", () => vSetup());
+  S.cfgDraft = null;
+  S.laneCover = { 0:854, 1:4535, 2:0, "-1":184 };
+  build("setup-with-coverage", () => vSetup());
+  S.cfgDraft = null; S.laneCover = null;
+  S.me = { id:"u2", name:"Office", role:"office", active:true };
+  build("setup-office", () => vSetup());
+  S.cfgDraft = null;
+  S.cfg = null; build("setup-loading", () => vSetup());
+  S.cfg = { lanes:[] };
+  S.me = { id:"u3", name:"Hadi", role:"admin", active:true };
+  S.cfgDraft = null;
+
+  // the zone dialog has to build, new and existing
+  document.body.children = [];
+  try {
+    askZone(null);
+    askZone({ code:"C", label:"Zone C", kind:"shelf", racks:22, levels:5,
+              capacity:0, note:null, sort:3 });
+    out["zone-dialogs"] = { ok:true,
+      text: document.body.children.map(c => c.textContent).join(" "), cls:"" };
+  } catch (e) { out["zone-dialogs"] = { ok:false, err:e && e.message }; }
+
   // a scanner must not be offered Money at all
   S.me = { id:"u1", name:"Ali Nasser", role:"scanner", active:true };
   out["tabs-scanner"] = { ok:true, text: visibleTabs().map(t => t.label).join(" "), cls:"" };
@@ -310,6 +347,21 @@ expect("money", "not set");
 expect("money-paged", "101–102 of 501");
 expect("payment-dialog", "across 1,185 parcels");
 expect("payment-dialog", "Mark $22,579.10 paid");
+
+expect("setup-admin", "Price per lane");
+expect("setup-admin", "Free storage days");
+expect("setup-admin", "Save settings");
+expect("setup-with-coverage", "184 parcels match no lane at all");
+expect("setup-office", "You can see these but not change them");
+expect("zone-dialogs", "Add a zone");
+expect("zone-dialogs", "cannot change");
+
+/* Office may read the rates but every control must be disabled, and the
+   screen must not offer a Discard that would imply it could save. */
+const offi = out["setup-office"];
+if (offi && offi.ok && /Discard changes/.test(offi.text)) {
+  fail++; console.log("  FAIL  office is offered Discard changes");
+} else pass++;
 
 /* The tabs themselves must not offer a scanner the money. */
 const tabs = n => ((out[n] || {}).text || "");
