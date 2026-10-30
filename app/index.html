@@ -1,0 +1,799 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>ChinaHub Warehouse</title>
+<meta name="description" content="Sign-in and staff control for the ChinaHub consolidation warehouse.">
+<meta name="theme-color" content="#0b5c5e">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+/* The tokens are the warehouse app's own, so the two look like one product. */
+:root{
+  --bg:#f3f6f5; --surface:#ffffff; --surface-2:#e9eeed; --surface-3:#dde4e3;
+  --line:#ccd6d4; --line-strong:#aebab8;
+  --fg:#141e1d; --fg-dim:#566766; --fg-faint:#7d8d8b;
+  --primary:#0b5c5e; --primary-hi:#0a4a4c; --primary-fg:#ffffff; --primary-wash:#dfeceb;
+  --st-expected:#6b7a79; --st-received:#9a5b06; --st-shelved:#0f766e;
+  --st-released:#4338ca; --st-delivered:#15803d;
+  --danger:#b4231d; --danger-wash:#fae6e4; --warn:#9a5b06; --ok:#15803d;
+  --shadow:0 1px 2px rgba(10,30,28,.07), 0 8px 24px -12px rgba(10,30,28,.18);
+  --shadow-lg:0 10px 48px -12px rgba(10,30,28,.34);
+  --r:10px; --r-sm:7px; --r-lg:16px;
+  --display:"Archivo","Segoe UI",system-ui,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){ :root:not([data-theme="light"]){
+  --bg:#0d1413; --surface:#151e1d; --surface-2:#1d2726; --surface-3:#273332;
+  --line:#2b3837; --line-strong:#3e4e4c;
+  --fg:#e4edec; --fg-dim:#94a4a2; --fg-faint:#748482;
+  --primary:#2fa39b; --primary-hi:#47b8af; --primary-fg:#04201f; --primary-wash:#16302f;
+  --st-expected:#8b9b99; --st-received:#d08a2a; --st-shelved:#2fa39b;
+  --st-released:#8b87f0; --st-delivered:#49ab62;
+  --danger:#e8655c; --danger-wash:#2e1a19; --warn:#d08a2a; --ok:#49ab62;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+  --shadow-lg:0 10px 48px -12px rgba(0,0,0,.75);
+  color-scheme:dark;
+}}
+:root[data-theme="dark"]{
+  --bg:#0d1413; --surface:#151e1d; --surface-2:#1d2726; --surface-3:#273332;
+  --line:#2b3837; --line-strong:#3e4e4c;
+  --fg:#e4edec; --fg-dim:#94a4a2; --fg-faint:#748482;
+  --primary:#2fa39b; --primary-hi:#47b8af; --primary-fg:#04201f; --primary-wash:#16302f;
+  --st-expected:#8b9b99; --st-received:#d08a2a; --st-shelved:#2fa39b;
+  --st-released:#8b87f0; --st-delivered:#49ab62;
+  --danger:#e8655c; --danger-wash:#2e1a19; --warn:#d08a2a; --ok:#49ab62;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+  --shadow-lg:0 10px 48px -12px rgba(0,0,0,.75);
+  color-scheme:dark;
+}
+
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  background:var(--bg); color:var(--fg);
+  font-family:var(--display); font-size:15px; line-height:1.45;
+  -webkit-font-smoothing:antialiased;
+  min-height:100dvh;
+}
+h1,h2,h3{margin:0;text-wrap:balance;letter-spacing:-.015em;font-weight:600}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2.5px solid var(--primary);outline-offset:2px;border-radius:4px}
+.mono{font-family:var(--mono);font-feature-settings:"zero" 1}
+.num{font-variant-numeric:tabular-nums}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+@media (prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+
+.gut{padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+
+/* ---------- sign in ---------- */
+.auth{min-height:100dvh;display:grid;place-items:center;padding:24px 0}
+.auth-card{
+  width:min(420px,100%); background:var(--surface); border:1px solid var(--line);
+  border-radius:var(--r-lg); box-shadow:var(--shadow-lg); padding:28px 24px 24px;
+}
+.logo{display:flex;align-items:center;gap:11px;margin-bottom:20px}
+.logo-m{
+  width:38px;height:38px;border-radius:9px;background:var(--primary);color:var(--primary-fg);
+  display:grid;place-items:center;font-weight:700;font-size:17px;flex:none;
+}
+.logo-t{font-weight:700;font-size:16px;letter-spacing:-.02em;line-height:1.2}
+.logo-s{font-size:12.5px;color:var(--fg-dim);line-height:1.3}
+
+/* ---------- shell ---------- */
+.top{
+  position:sticky;top:0;z-index:50;background:var(--surface);
+  border-bottom:1px solid var(--line);
+  padding-top:env(safe-area-inset-top,0px);
+}
+.top-in{display:flex;align-items:center;gap:12px;padding-block:9px;max-width:1280px;margin:0 auto}
+.brand{display:flex;align-items:center;gap:10px;min-width:0;margin-right:auto}
+.brand-tx{min-width:0}
+.who{display:flex;align-items:center;gap:9px;min-width:0}
+.who-nm{font-weight:600;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:22ch}
+.tabs{display:flex;gap:4px;overflow-x:auto;scrollbar-width:none;max-width:1280px;margin:0 auto;padding-bottom:7px}
+.tabs::-webkit-scrollbar{display:none}
+.tab{
+  border:1px solid transparent;background:none;color:var(--fg-dim);
+  padding:6px 13px;border-radius:999px;font-size:13.5px;font-weight:600;white-space:nowrap;
+}
+.tab:hover{background:var(--surface-2);color:var(--fg)}
+.tab[aria-current="page"]{background:var(--primary);border-color:var(--primary);color:var(--primary-fg)}
+main{max-width:1280px;margin:0 auto;padding:18px 0 72px}
+.vhead{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+.vhead h2{font-size:21px}
+.sub{color:var(--fg-dim);font-size:13.5px}
+
+/* ---------- bits ---------- */
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:7px;
+  border:1px solid var(--line-strong);background:var(--surface);color:var(--fg);
+  padding:9px 15px;border-radius:var(--r-sm);font-weight:600;font-size:14px;
+  min-height:42px;
+}
+.btn:hover{background:var(--surface-2)}
+.btn[disabled]{opacity:.5;cursor:not-allowed}
+.btn.pri{background:var(--primary);border-color:var(--primary);color:var(--primary-fg)}
+.btn.pri:hover{background:var(--primary-hi)}
+.btn.dng{color:var(--danger);border-color:var(--danger)}
+.btn.dng:hover{background:var(--danger-wash)}
+.btn.sm{min-height:34px;padding:5px 11px;font-size:13px}
+.btn.wide{width:100%}
+.field{display:block;margin-bottom:14px}
+.field>span{display:block;font-size:12.5px;font-weight:600;color:var(--fg-dim);margin-bottom:5px}
+.inp{
+  width:100%;background:var(--surface);border:1px solid var(--line-strong);
+  border-radius:var(--r-sm);padding:10px 12px;min-height:44px;
+}
+.inp:focus{border-color:var(--primary);outline:none;box-shadow:0 0 0 3px var(--primary-wash)}
+select.inp{appearance:none;background-image:linear-gradient(45deg,transparent 49%,var(--fg-dim) 50%),linear-gradient(-45deg,transparent 49%,var(--fg-dim) 50%);background-size:6px 6px;background-position:calc(100% - 16px) 19px,calc(100% - 10px) 19px;background-repeat:no-repeat;padding-right:34px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow)}
+.pad{padding:16px}
+.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:560px){.g2{grid-template-columns:1fr}}
+.chip{
+  display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:999px;
+  font-size:11.5px;font-weight:700;letter-spacing:.02em;text-transform:uppercase;
+  background:var(--surface-2);color:var(--fg-dim);
+}
+.chip.scanner{background:color-mix(in srgb,var(--st-expected) 16%,transparent);color:var(--st-expected)}
+.chip.office{background:color-mix(in srgb,var(--st-released) 16%,transparent);color:var(--st-released)}
+.chip.admin{background:var(--primary-wash);color:var(--primary)}
+.chip.off{background:var(--danger-wash);color:var(--danger)}
+.chip.s-expected{background:color-mix(in srgb,var(--st-expected) 16%,transparent);color:var(--st-expected)}
+.chip.s-received{background:color-mix(in srgb,var(--st-received) 16%,transparent);color:var(--st-received)}
+.chip.s-shelved{background:color-mix(in srgb,var(--st-shelved) 16%,transparent);color:var(--st-shelved)}
+.chip.s-released{background:color-mix(in srgb,var(--st-released) 16%,transparent);color:var(--st-released)}
+.chip.s-delivered{background:color-mix(in srgb,var(--st-delivered) 16%,transparent);color:var(--st-delivered)}
+.banner{
+  display:flex;gap:11px;padding:12px 14px;border-radius:var(--r);
+  border:1px solid var(--line);background:var(--surface-2);margin-bottom:14px;font-size:13.5px;
+}
+.banner b{display:block;margin-bottom:2px}
+.banner.bad{background:var(--danger-wash);border-color:color-mix(in srgb,var(--danger) 35%,transparent);color:var(--danger)}
+.banner.warn{background:color-mix(in srgb,var(--warn) 12%,transparent);border-color:color-mix(in srgb,var(--warn) 35%,transparent)}
+.banner.ok{background:color-mix(in srgb,var(--ok) 12%,transparent);border-color:color-mix(in srgb,var(--ok) 35%,transparent)}
+.empty{text-align:center;padding:44px 20px;color:var(--fg-dim)}
+.empty b{display:block;color:var(--fg);font-size:16px;margin-bottom:5px}
+
+/* ---------- staff + records lists ---------- */
+.list{display:flex;flex-direction:column;gap:1px;background:var(--line);border-radius:var(--r);overflow:hidden;border:1px solid var(--line)}
+.li{background:var(--surface);padding:13px 15px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.li-m{min-width:0;flex:1 1 220px}
+.li-nm{font-weight:600;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.li-s{font-size:12.5px;color:var(--fg-dim);margin-top:2px}
+.li-a{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+.me{font-size:11px;color:var(--fg-faint);font-weight:600}
+
+/* ---------- toasts ---------- */
+.toasts{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(18px + env(safe-area-inset-bottom,0px));z-index:90;display:flex;flex-direction:column;gap:8px;width:min(440px,calc(100vw - 32px))}
+.toast{
+  background:var(--fg);color:var(--bg);padding:11px 15px;border-radius:var(--r-sm);
+  box-shadow:var(--shadow-lg);font-size:13.5px;font-weight:500;
+}
+.toast.bad{background:var(--danger);color:#fff}
+.toast.ok{background:var(--ok);color:#fff}
+
+/* ---------- modal ---------- */
+.scrim{position:fixed;inset:0;background:rgba(10,20,19,.5);z-index:80;display:grid;place-items:center;padding:18px}
+.modal{width:min(440px,100%);background:var(--surface);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:22px;max-height:90dvh;overflow:auto}
+.modal h3{font-size:18px;margin-bottom:4px}
+.spin{display:inline-block;width:15px;height:15px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:sp .6s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div id="app" class="gut"></div>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<script type="module">
+import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm";
+
+/* The project and its publishable key. The key is meant to sit in client code:
+   on its own it opens nothing, because every table is behind row-level
+   security and an account with no profile has no role and therefore no access. */
+const SUPABASE_URL = "https://llarspjcyvqzylxjxlld.supabase.co";
+const SUPABASE_KEY = "sb_publishable_OKETaCQWF5_VvMj2Wa3cMw_jpOA3DBa";
+
+const ROLES = {
+  scanner: { label: "Scanner", blurb: "Shelves and looks up parcels. Never sees a charge." },
+  office:  { label: "Office",  blurb: "Prices parcels and takes payment." },
+  admin:   { label: "Admin",   blurb: "Everything, plus staff accounts and rates." },
+};
+const STATUS = {
+  expected:  "On the way",
+  received:  "In the warehouse",
+  shelved:   "On a shelf",
+  released:  "Out for delivery",
+  delivered: "Delivered",
+};
+
+const S = {
+  sb: null,
+  session: null,
+  me: null,            /* own profiles row, or null when there is none */
+  tab: "records",
+  staff: [],
+  busy: false,
+  q: "",
+  rows: null,          /* last search result, null before the first search */
+  searching: false,
+};
+
+/* ------------------------------------------------------------- helpers ---- */
+const $ = (s, r = document) => r.querySelector(s);
+const el = (t, c, x) => {
+  const n = document.createElement(t);
+  if (c) n.className = c;
+  if (x != null) n.textContent = x;
+  return n;
+};
+const sees_money = () => S.me && (S.me.role === "office" || S.me.role === "admin");
+const isAdmin = () => S.me && S.me.role === "admin";
+const nf2 = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const money = n => "$" + nf2.format(Number(n) || 0);
+const fmtDate = s => s ? new Date(s).toLocaleDateString([], { day: "2-digit", month: "short", year: "2-digit" }) : "—";
+
+function toast(msg, kind) {
+  const t = el("div", "toast" + (kind ? " " + kind : ""), msg);
+  $("#toasts").append(t);
+  setTimeout(() => t.remove(), kind === "bad" ? 6000 : 3500);
+}
+
+/* Supabase's own wording is fine for a wrong password and unhelpful for the
+   rest, so the cases worth explaining get explained. */
+function authMessage(err) {
+  const m = String(err && err.message || err || "");
+  if (/invalid login credentials/i.test(m)) return "That email and password do not match.";
+  if (/email not confirmed/i.test(m)) return "That account has not been confirmed yet.";
+  if (/failed to fetch|networkerror/i.test(m)) return "No connection. Check the network and try again.";
+  if (/rate limit|too many/i.test(m)) return "Too many tries. Wait a minute and try again.";
+  return m || "Could not sign in.";
+}
+
+function banner(kind, title, body) {
+  const b = el("div", "banner" + (kind ? " " + kind : ""));
+  const w = el("div");
+  w.append(el("b", null, title));
+  if (body) w.append(document.createTextNode(body));
+  b.append(w);
+  return b;
+}
+
+function logo() {
+  const w = el("div", "logo");
+  const m = el("div", "logo-m", "CH");
+  const t = el("div");
+  t.append(el("div", "logo-t", "ChinaHub Warehouse"));
+  t.append(el("div", "logo-s", "China → Lebanon · consolidation hub"));
+  w.append(m, t);
+  return w;
+}
+
+/* --------------------------------------------------------------- sign in --- */
+function vSignIn() {
+  const wrap = el("div", "auth");
+  const card = el("form", "auth-card");
+  card.append(logo());
+
+  const h = el("h2", null, "Sign in");
+  h.style.fontSize = "19px";
+  card.append(h);
+  const sub = el("p", "sub", "Your warehouse account. Ask Hadi if you do not have one.");
+  sub.style.margin = "4px 0 18px";
+  card.append(sub);
+
+  const err = el("div");
+  card.append(err);
+
+  const f1 = el("label", "field");
+  f1.append(el("span", null, "Email"));
+  const email = el("input", "inp");
+  email.type = "email"; email.required = true; email.autocomplete = "username";
+  email.placeholder = "you@example.com";
+  f1.append(email);
+
+  const f2 = el("label", "field");
+  f2.append(el("span", null, "Password"));
+  const pass = el("input", "inp");
+  pass.type = "password"; pass.required = true; pass.autocomplete = "current-password";
+  f2.append(pass);
+
+  const go = el("button", "btn pri wide", "Sign in");
+  go.type = "submit";
+
+  card.append(f1, f2, go);
+
+  card.addEventListener("submit", async ev => {
+    ev.preventDefault();
+    err.textContent = "";
+    go.disabled = true;
+    go.textContent = "";
+    go.append(el("span", "spin"), document.createTextNode(" Signing in"));
+    const { error } = await S.sb.auth.signInWithPassword({
+      email: email.value.trim(), password: pass.value,
+    });
+    if (error) {
+      err.replaceChildren(banner("bad", "Could not sign in", authMessage(error)));
+      go.disabled = false;
+      go.textContent = "Sign in";
+      pass.value = "";
+      pass.focus();
+      return;
+    }
+    /* onAuthStateChange picks it up and re-renders. */
+  });
+
+  wrap.append(card);
+  return wrap;
+}
+
+/* An account that exists but has no role yet, or has been switched off. Both
+   land here, and from the outside they are the same thing: ask Hadi. */
+function vNoAccess() {
+  const wrap = el("div", "auth");
+  const card = el("div", "auth-card");
+  card.append(logo());
+  card.append(banner("warn", "This account cannot see the warehouse yet",
+    "You are signed in, but nobody has given this account a role. Ask Hadi to set it up, " +
+    "then sign in again."));
+  const who = el("p", "sub", "Signed in as " + (S.session?.user?.email || "—"));
+  who.style.margin = "0 0 14px";
+  card.append(who);
+  const out = el("button", "btn wide", "Sign out");
+  out.onclick = signOut;
+  card.append(out);
+  wrap.append(card);
+  return wrap;
+}
+
+async function signOut() {
+  await S.sb.auth.signOut();
+  S.me = null; S.staff = []; S.rows = null; S.q = "";
+  render();
+}
+
+/* ----------------------------------------------------------------- shell --- */
+function shell(view) {
+  const frag = document.createDocumentFragment();
+
+  const top = el("header", "top");
+  const inr = el("div", "top-in gut");
+  const brand = el("div", "brand");
+  brand.append(el("div", "logo-m", "CH"));
+  const bt = el("div", "brand-tx");
+  bt.append(el("div", "logo-t", "ChinaHub Warehouse"));
+  bt.append(el("div", "logo-s", S.me.name));
+  brand.append(bt);
+
+  const who = el("div", "who");
+  who.append(roleChip(S.me.role));
+  const out = el("button", "btn sm", "Sign out");
+  out.onclick = signOut;
+  who.append(out);
+
+  inr.append(brand, who);
+  top.append(inr);
+
+  const tabs = el("nav", "tabs gut");
+  for (const t of visibleTabs()) {
+    const b = el("button", "tab", t.label);
+    if (t.id === S.tab) b.setAttribute("aria-current", "page");
+    b.onclick = () => { S.tab = t.id; render(); };
+    tabs.append(b);
+  }
+  top.append(tabs);
+
+  const main = el("main", "gut");
+  main.append(view);
+  frag.append(top, main);
+  return frag;
+}
+
+function visibleTabs() {
+  const t = [{ id: "records", label: "Records" }];
+  if (isAdmin()) t.push({ id: "staff", label: "Staff" });
+  return t;
+}
+
+function roleChip(role) {
+  return el("span", "chip " + role, (ROLES[role] || {}).label || role);
+}
+
+/* --------------------------------------------------------------- records --- */
+/* A lookup, so the data layer is proved end to end: a scanner sees where a
+   parcel is and never a charge, because the view returns null for the money
+   columns rather than the app choosing not to draw them. */
+function vRecords() {
+  const v = el("section");
+  const head = el("div", "vhead");
+  const h = el("div");
+  h.append(el("h2", null, "Records"));
+  h.append(el("div", "sub", sees_money()
+    ? "Search by barcode, customer, phone, shelf or shipment."
+    : "Search by barcode, customer, phone, shelf or shipment. Charges are not shown to a scanner."));
+  head.append(h);
+  v.append(head);
+
+  const form = el("form", "row");
+  form.style.marginBottom = "14px";
+  const q = el("input", "inp mono");
+  q.placeholder = "Scan or type a barcode…";
+  q.value = S.q;
+  q.autocomplete = "off";
+  q.style.flex = "1 1 260px";
+  const go = el("button", "btn pri", "Search");
+  go.type = "submit";
+  form.append(q, go);
+  form.addEventListener("submit", ev => { ev.preventDefault(); S.q = q.value; search(); });
+  v.append(form);
+
+  if (S.searching) {
+    const e = el("div", "empty");
+    e.append(el("span", "spin"));
+    e.append(el("div", null, "Looking…"));
+    v.append(e);
+    return v;
+  }
+  if (S.rows == null) {
+    const e = el("div", "empty");
+    e.append(el("b", null, "Nothing searched yet"));
+    e.append(document.createTextNode("Scan a barcode or type part of a name, shelf or shipment."));
+    v.append(e);
+    return v;
+  }
+  if (!S.rows.length) {
+    const e = el("div", "empty");
+    e.append(el("b", null, "No parcel matches that"));
+    e.append(document.createTextNode("Check the barcode, or try part of the customer's name."));
+    v.append(e);
+    return v;
+  }
+
+  const list = el("div", "list");
+  for (const r of S.rows) list.append(recordRow(r));
+  v.append(list);
+  if (S.rows.length === 50)
+    v.append(banner(null, "Showing the first 50", "Narrow the search to see fewer."));
+  return v;
+}
+
+function recordRow(r) {
+  const li = el("div", "li");
+  const m = el("div", "li-m");
+  const nm = el("div", "li-nm");
+  nm.append(el("span", "mono", r.barcode));
+  nm.append(el("span", "chip s-" + r.status, STATUS[r.status] || r.status));
+  m.append(nm);
+  const bits = [];
+  if (r.name) bits.push(r.name.length > 48 ? r.name.slice(0, 48) + "…" : r.name);
+  if (r.customer) bits.push("for " + r.customer);
+  bits.push("at " + (r.shelf || r.zone || "—"));
+  if (r.shipment) bits.push(r.shipment);
+  m.append(el("div", "li-s", bits.join("  ·  ")));
+  li.append(m);
+
+  const a = el("div", "li-a");
+  /* r.cost is null for a scanner — the database masked it, not the screen. */
+  if (r.cost != null) {
+    const c = el("span", "mono num", money(r.cost));
+    c.style.fontWeight = "600";
+    a.append(c);
+    a.append(el("span", "chip " + (r.paid ? "s-delivered" : "off"), r.paid ? "Paid" : "Unpaid"));
+  }
+  if (r.shipped_at) a.append(el("span", "li-s", "shipped " + fmtDate(r.shipped_at)));
+  li.append(a);
+  return li;
+}
+
+async function search() {
+  const term = S.q.trim();
+  if (!term) { S.rows = null; render(); return; }
+  S.searching = true; render();
+  const like = "%" + term.replace(/[%,]/g, " ") + "%";
+  const { data, error } = await S.sb
+    .from("parcels_view")
+    .select("barcode,name,customer,phone,shipment,status,zone,shelf,cost,paid,shipped_at")
+    .or([
+      "barcode.ilike." + like,
+      "customer.ilike." + like,
+      "phone.ilike." + like,
+      "shelf.ilike." + like,
+      "shipment.ilike." + like,
+    ].join(","))
+    .order("barcode")
+    .limit(50);
+  S.searching = false;
+  if (error) { toast(error.message, "bad"); S.rows = []; render(); return; }
+  S.rows = data || [];
+  render();
+}
+
+/* ----------------------------------------------------------------- staff --- */
+function vStaff() {
+  const v = el("section");
+  const head = el("div", "vhead");
+  const h = el("div");
+  h.append(el("h2", null, "Staff"));
+  h.append(el("div", "sub", "Who can sign in, and what each of them may do."));
+  head.append(h);
+  const add = el("button", "btn pri", "Add someone");
+  add.onclick = askAddStaff;
+  add.style.marginLeft = "auto";
+  head.append(add);
+  v.append(head);
+
+  v.append(banner(null, "Roles are enforced by the database, not the screen",
+    "A scanner who got past this app still cannot read a charge or write one: the records " +
+    "view hands them nulls where the money is, and a trigger refuses the write."));
+
+  if (!S.staff.length) {
+    const e = el("div", "empty");
+    e.append(el("span", "spin"));
+    e.append(el("div", null, "Loading staff…"));
+    v.append(e);
+    return v;
+  }
+
+  const list = el("div", "list");
+  for (const p of S.staff) list.append(staffRow(p));
+  v.append(list);
+  return v;
+}
+
+function staffRow(p) {
+  const li = el("div", "li");
+  const m = el("div", "li-m");
+  const nm = el("div", "li-nm");
+  nm.append(el("span", null, p.name));
+  nm.append(roleChip(p.role));
+  if (!p.active) nm.append(el("span", "chip off", "Turned off"));
+  if (p.id === S.me.id) nm.append(el("span", "me", "— you"));
+  m.append(nm);
+  m.append(el("div", "li-s", (ROLES[p.role] || {}).blurb + "  ·  added " + fmtDate(p.created_at)));
+  li.append(m);
+
+  const a = el("div", "li-a");
+  if (p.id === S.me.id) {
+    /* The database only stops the *last* admin stepping down. Stopping it here
+       as well is this app's own choice: losing your own way back in is not
+       something to do by mis-tapping a dropdown. */
+    a.append(el("span", "li-s", "Change your own role from another admin account"));
+  } else {
+    const sel = el("select", "inp sm");
+    sel.style.minHeight = "34px";
+    sel.style.width = "auto";
+    for (const r in ROLES) {
+      const o = el("option", null, ROLES[r].label);
+      o.value = r;
+      if (p.role === r) o.selected = true;
+      sel.append(o);
+    }
+    sel.onchange = () => setRole(p, sel.value);
+    a.append(sel);
+
+    const t = el("button", "btn sm" + (p.active ? " dng" : ""), p.active ? "Turn off" : "Turn on");
+    t.onclick = () => setActive(p, !p.active);
+    a.append(t);
+  }
+  li.append(a);
+  return li;
+}
+
+async function loadStaff() {
+  const { data, error } = await S.sb.from("profiles")
+    .select("id,name,role,active,created_at")
+    .order("role").order("name");
+  if (error) { toast(error.message, "bad"); return; }
+  S.staff = data || [];
+  render();
+}
+
+async function setRole(p, role) {
+  if (role === p.role) return;
+  const { error } = await S.sb.from("profiles").update({ role }).eq("id", p.id);
+  if (error) { toast(error.message, "bad"); loadStaff(); return; }
+  toast(p.name + " is now " + ROLES[role].label.toLowerCase(), "ok");
+  loadStaff();
+}
+
+async function setActive(p, active) {
+  const { error } = await S.sb.from("profiles").update({ active }).eq("id", p.id);
+  if (error) { toast(error.message, "bad"); loadStaff(); return; }
+  toast(p.name + (active ? " can sign in again" : " can no longer sign in"), "ok");
+  loadStaff();
+}
+
+/* ------------------------------------------------------------ add staff --- */
+function askAddStaff() {
+  const scrim = el("div", "scrim");
+  const m = el("form", "modal");
+  m.append(el("h3", null, "Add someone"));
+  const sub = el("p", "sub", "This creates their sign-in and gives them a first password to change.");
+  sub.style.margin = "4px 0 16px";
+  m.append(sub);
+
+  const err = el("div");
+  m.append(err);
+
+  const f1 = el("label", "field");
+  f1.append(el("span", null, "Name"));
+  const name = el("input", "inp");
+  name.required = true; name.placeholder = "Ali Nasser"; name.autocomplete = "off";
+  f1.append(name);
+
+  const f2 = el("label", "field");
+  f2.append(el("span", null, "Email"));
+  const email = el("input", "inp");
+  email.type = "email"; email.required = true; email.placeholder = "ali@example.com";
+  email.autocomplete = "off";
+  f2.append(email);
+
+  const f3 = el("label", "field");
+  f3.append(el("span", null, "Role"));
+  const role = el("select", "inp");
+  for (const r in ROLES) {
+    const o = el("option", null, ROLES[r].label + " — " + ROLES[r].blurb);
+    o.value = r;
+    role.append(o);
+  }
+  f3.append(role);
+
+  const acts = el("div", "row");
+  acts.style.marginTop = "4px";
+  const go = el("button", "btn pri", "Create the account");
+  go.type = "submit";
+  const no = el("button", "btn", "Cancel");
+  no.type = "button";
+  no.onclick = () => scrim.remove();
+  acts.append(go, no);
+
+  m.append(f1, f2, f3, acts);
+
+  m.addEventListener("submit", async ev => {
+    ev.preventDefault();
+    err.textContent = "";
+    go.disabled = true; no.disabled = true;
+    go.textContent = "";
+    go.append(el("span", "spin"), document.createTextNode(" Creating"));
+    const res = await callFn("staff", {
+      action: "create",
+      name: name.value.trim(), email: email.value.trim(), role: role.value,
+    });
+    if (!res.ok) {
+      err.replaceChildren(banner("bad", "Could not create the account", res.error));
+      go.disabled = false; no.disabled = false;
+      go.textContent = "Create the account";
+      return;
+    }
+    scrim.remove();
+    showFirstPassword(res.data);
+    loadStaff();
+  });
+
+  scrim.append(m);
+  scrim.addEventListener("click", e => { if (e.target === scrim) scrim.remove(); });
+  document.body.append(scrim);
+  name.focus();
+}
+
+/* The one time the password is visible. It is not stored anywhere this app can
+   read it back, so it is shown once and the admin passes it on. */
+function showFirstPassword(d) {
+  const scrim = el("div", "scrim");
+  const m = el("div", "modal");
+  m.append(el("h3", null, d.name + " can now sign in"));
+  m.append(banner("ok", "Give them these, once",
+    "They should change the password after their first sign-in. This is the only time it is shown."));
+  const box = el("div", "card pad");
+  const e = el("div");
+  e.append(el("div", "li-s", "Email"));
+  e.append(el("div", "mono", d.email));
+  const p = el("div");
+  p.style.marginTop = "10px";
+  p.append(el("div", "li-s", "First password"));
+  const pw = el("div", "mono", d.password);
+  pw.style.fontSize = "17px";
+  pw.style.fontWeight = "600";
+  p.append(pw);
+  box.append(e, p);
+  m.append(box);
+
+  const acts = el("div", "row");
+  acts.style.marginTop = "14px";
+  const copy = el("button", "btn", "Copy both");
+  copy.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(d.email + "\n" + d.password);
+      toast("Copied", "ok");
+    } catch (_) { toast("Could not copy — write them down", "bad"); }
+  };
+  const done = el("button", "btn pri", "Done");
+  done.onclick = () => scrim.remove();
+  acts.append(done, copy);
+  m.append(acts);
+  scrim.append(m);
+  document.body.append(scrim);
+}
+
+/* Edge functions want the caller's own token, so an admin check can happen
+   server-side where the service key lives. */
+async function callFn(fn, body) {
+  try {
+    const { data, error } = await S.sb.functions.invoke(fn, { body });
+    if (error) {
+      /* The useful message is in the response body, not the thrown error. */
+      let msg = error.message || "That did not work.";
+      try {
+        const ctx = error.context;
+        if (ctx && typeof ctx.json === "function") {
+          const j = await ctx.json();
+          if (j && j.error) msg = j.error;
+        }
+      } catch (_) {}
+      return { ok: false, error: msg };
+    }
+    if (data && data.error) return { ok: false, error: data.error };
+    return { ok: true, data };
+  } catch (e) {
+    return { ok: false, error: String(e && e.message || e) };
+  }
+}
+
+/* ------------------------------------------------------------------ boot --- */
+function render() {
+  const app = $("#app");
+  if (!S.session) { app.replaceChildren(vSignIn()); return; }
+  if (!S.me) { app.replaceChildren(vNoAccess()); return; }
+  const view = S.tab === "staff" && isAdmin() ? vStaff() : vRecords();
+  app.replaceChildren(shell(view));
+}
+
+/* A signed-in account with no profile row, or an inactive one, reads back
+   nothing — which is the right answer either way, and the same one. */
+async function loadMe() {
+  const uid = S.session?.user?.id;
+  if (!uid) { S.me = null; return; }
+  const { data, error } = await S.sb.from("profiles")
+    .select("id,name,role,active").eq("id", uid).maybeSingle();
+  if (error) { S.me = null; return; }
+  S.me = (data && data.active) ? data : null;
+}
+
+async function boot() {
+  S.sb = createClient(SUPABASE_URL, SUPABASE_KEY, {
+    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
+  });
+
+  const { data } = await S.sb.auth.getSession();
+  S.session = data.session || null;
+  if (S.session) await loadMe();
+  render();
+  if (isAdmin()) loadStaff();
+
+  S.sb.auth.onAuthStateChange(async (evt, session) => {
+    const was = S.session?.user?.id || null;
+    S.session = session || null;
+    if ((S.session?.user?.id || null) !== was) {
+      S.me = null; S.staff = []; S.rows = null;
+      if (S.session) await loadMe();
+      render();
+      if (isAdmin()) loadStaff();
+    }
+  });
+}
+
+boot().catch(e => {
+  $("#app").replaceChildren(banner("bad", "The app could not start", String(e && e.message || e)));
+});
+
+if ("serviceWorker" in navigator)
+  addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+</script>
+</body>
+</html>

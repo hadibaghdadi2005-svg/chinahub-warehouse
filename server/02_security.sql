@@ -11,9 +11,12 @@ alter table parcel_events enable row level security;
 alter table settings      enable row level security;
 
 -- --------------------------------------------------------------- staff ----
--- Everyone may read the staff list — the app shows who did what.
+-- Staff may read the staff list — the app shows who did what. Someone who is
+-- merely signed in, with no profile or a switched-off one, reads nothing:
+-- that is already true of every other table, and the staff list is no more
+-- theirs to see than the parcels are.
 create policy profiles_read on profiles
-  for select to authenticated using (true);
+  for select to authenticated using (my_role() is not null);
 
 -- Only an admin creates, changes or deactivates an account.
 create policy profiles_admin_write on profiles
@@ -24,17 +27,44 @@ create policy profiles_admin_write on profiles
 create policy profiles_own_name on profiles
   for update to authenticated using (id = auth.uid()) with check (id = auth.uid());
 
+-- Two jobs: stop a role being raised through the policy above, and keep the
+-- warehouse from losing its last admin. Without the second, one admin stepping
+-- themselves down leaves nobody able to add staff or change a rate again, and
+-- only someone with database access could undo it.
 create or replace function profiles_guard() returns trigger
 language plpgsql security definer set search_path = public as $$
+declare admins int;
 begin
-  if is_admin() then return new; end if;
-  if new.role <> old.role or new.active <> old.active or new.id <> old.id then
-    raise exception 'Only an admin may change a role or deactivate an account';
+  if TG_OP = 'DELETE' then
+    if old.role = 'admin' and old.active then
+      select count(*) into admins from profiles where role = 'admin' and active;
+      if admins <= 1 then
+        raise exception 'The last admin cannot be removed. Make someone else an admin first.';
+      end if;
+    end if;
+    return old;
+  end if;
+
+  if not is_admin() then
+    if new.role <> old.role or new.active <> old.active or new.id <> old.id then
+      raise exception 'Only an admin may change a role or deactivate an account';
+    end if;
+    return new;
+  end if;
+
+  -- An admin, including acting on their own row.
+  if old.role = 'admin' and old.active and (new.role <> 'admin' or not new.active) then
+    select count(*) into admins from profiles where role = 'admin' and active;
+    if admins <= 1 then
+      raise exception 'The last admin cannot be stepped down. Make someone else an admin first.';
+    end if;
   end if;
   return new;
 end $$;
 
 create trigger profiles_guard_tr before update on profiles
+  for each row execute function profiles_guard();
+create trigger profiles_guard_del before delete on profiles
   for each row execute function profiles_guard();
 
 -- --------------------------------------------------------------- zones ----
