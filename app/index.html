@@ -187,6 +187,43 @@ select.inp{appearance:none;background-image:linear-gradient(45deg,transparent 49
 .scanbox .inp{flex:1;font-size:19px;min-height:54px;letter-spacing:.02em}
 .scanbox .btn{min-height:54px;padding-inline:20px}
 
+/* ---------- stock tiles ---------- */
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:14px}
+.tile{
+  display:flex;flex-direction:column;gap:1px;align-items:flex-start;text-align:left;
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+  padding:11px 13px;box-shadow:var(--shadow);min-height:74px;
+}
+.tile:hover{border-color:var(--line-strong)}
+.tile.on{border-color:var(--primary);box-shadow:0 0 0 1px var(--primary) inset,var(--shadow)}
+.tile .k{font-size:12px;font-weight:600;color:var(--fg-dim);letter-spacing:.01em}
+.tile .v{font-size:23px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.15}
+.tile .n{font-size:11.5px;color:var(--fg-faint);line-height:1.25}
+
+/* ---------- zones ---------- */
+.hr-t{display:flex;align-items:center;gap:10px;margin:18px 0 10px}
+.hr-t::after{content:"";flex:1;height:1px;background:var(--line)}
+.sect-t{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--fg-dim)}
+.zgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));gap:10px}
+.zcard{
+  display:flex;flex-direction:column;gap:2px;align-items:flex-start;text-align:left;
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+  padding:14px;box-shadow:var(--shadow);
+}
+.zcard:hover{border-color:var(--primary)}
+.zt{display:flex;align-items:baseline;gap:8px;margin-bottom:2px}
+.zc{
+  font-family:var(--mono);font-weight:700;font-size:13px;
+  background:var(--primary-wash);color:var(--primary);padding:1px 7px;border-radius:5px;
+}
+.zn{font-weight:600;font-size:14px}
+.zv{font-size:27px;font-weight:700;letter-spacing:-.025em;font-variant-numeric:tabular-nums;line-height:1.1}
+.sub2{font-size:11.5px;color:var(--fg-faint);line-height:1.3}
+.zbar{height:5px;border-radius:999px;background:var(--surface-3);width:100%;margin-top:7px;overflow:hidden}
+.zbar i{display:block;height:100%;background:var(--primary);border-radius:999px}
+.zbar.stg i{background:var(--st-received)}
+.zbar.hot i{background:var(--danger)}
+
 /* ---------- toasts ---------- */
 .toasts{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(18px + env(safe-area-inset-bottom,0px));z-index:90;display:flex;flex-direction:column;gap:8px;width:min(440px,calc(100vw - 32px))}
 .toast{
@@ -248,9 +285,17 @@ const S = {
   tab: "scan",
   staff: [],
   busy: false,
+
+  /* stock */
   q: "",
-  rows: null,          /* last search result, null before the first search */
+  rows: null,          /* the page on screen, null before the first load */
   searching: false,
+  filters: { status: "", zone: "", paid: "" },
+  page: 0,
+  pageSize: 50,
+  total: 0,
+  stats: null,         /* the tiles, counted by the database */
+  zoneStats: null,
 
   /* scan station */
   zones: [],
@@ -273,6 +318,7 @@ const el = (t, c, x) => {
 };
 const sees_money = () => S.me && (S.me.role === "office" || S.me.role === "admin");
 const isAdmin = () => S.me && S.me.role === "admin";
+const nf0 = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 const nf2 = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const money = n => "$" + nf2.format(Number(n) || 0);
 const fmtDate = s => s ? new Date(s).toLocaleDateString([], { day: "2-digit", month: "short", year: "2-digit" }) : "—";
@@ -422,7 +468,13 @@ function shell(view) {
   for (const t of visibleTabs()) {
     const b = el("button", "tab", t.label);
     if (t.id === S.tab) b.setAttribute("aria-current", "page");
-    b.onclick = () => { S.tab = t.id; render(); };
+    b.onclick = () => {
+      S.tab = t.id;
+      render();
+      /* Load on arrival, so a tab is never opened onto stale counts. */
+      if (t.id === "stock") { if (!S.stats) loadStats(); if (!S.rows) loadStock(); }
+      if (t.id === "zones" && !S.zoneStats) loadZoneStats();
+    };
     tabs.append(b);
   }
   top.append(tabs);
@@ -434,7 +486,11 @@ function shell(view) {
 }
 
 function visibleTabs() {
-  const t = [{ id: "scan", label: "Scan" }, { id: "records", label: "Records" }];
+  const t = [
+    { id: "scan", label: "Scan" },
+    { id: "stock", label: "Stock" },
+    { id: "zones", label: "Zones" },
+  ];
   if (isAdmin()) t.push({ id: "staff", label: "Staff" });
   return t;
 }
@@ -629,6 +685,10 @@ async function handleScan(raw) {
     try {
       const res = await moveParcel(known, to, loc);
       S.undo = { barcode: bc, name: known.name, before: res.before };
+      /* The counts and the list are now a move out of date. Rather than pay
+         for a recount after every scan — the gun fires faster than that —
+         they are dropped, and rebuilt when someone next looks at them. */
+      S.stats = null; S.rows = null; S.zoneStats = null;
       ping(true);
       const where = S.mode === "shelve" ? " → " + (S.dest.shelf || S.dest.zone)
                   : S.mode === "receive" && S.recvZone ? " → " + S.recvZone : "";
@@ -804,33 +864,26 @@ function vScan() {
   return v;
 }
 
-/* --------------------------------------------------------------- records --- */
-/* A lookup, so the data layer is proved end to end: a scanner sees where a
-   parcel is and never a charge, because the view returns null for the money
-   columns rather than the app choosing not to draw them. */
-function vRecords() {
+/* ----------------------------------------------------------------- stock --- */
+/* Everything the warehouse knows about, counted and filtered by the database
+   rather than pulled down and sifted here. Eight thousand parcels is more than
+   a scanning gun should ever have to hold in memory, and the counts have to be
+   right for the caller: a scanner's tiles simply have no money on them,
+   because the figures never leave the database. */
+
+function vStock() {
   const v = el("section");
   const head = el("div", "vhead");
   const h = el("div");
-  h.append(el("h2", null, "Records"));
+  h.append(el("h2", null, "Stock"));
   h.append(el("div", "sub", sees_money()
-    ? "Search by barcode, customer, phone, shelf or shipment."
-    : "Search by barcode, customer, phone, shelf or shipment. Charges are not shown to a scanner."));
+    ? "Every parcel the warehouse knows about."
+    : "Every parcel the warehouse knows about. Charges are not shown to a scanner."));
   head.append(h);
   v.append(head);
 
-  const form = el("form", "row");
-  form.style.marginBottom = "14px";
-  const q = el("input", "inp mono");
-  q.placeholder = "Scan or type a barcode…";
-  q.value = S.q;
-  q.autocomplete = "off";
-  q.style.flex = "1 1 260px";
-  const go = el("button", "btn pri", "Search");
-  go.type = "submit";
-  form.append(q, go);
-  form.addEventListener("submit", ev => { ev.preventDefault(); S.q = q.value; search(); });
-  v.append(form);
+  v.append(stockTiles());
+  v.append(stockFilters());
 
   if (S.searching) {
     const e = el("div", "empty");
@@ -839,17 +892,19 @@ function vRecords() {
     v.append(e);
     return v;
   }
-  if (S.rows == null) {
+  if (!S.rows) {
     const e = el("div", "empty");
-    e.append(el("b", null, "Nothing searched yet"));
-    e.append(document.createTextNode("Scan a barcode or type part of a name, shelf or shipment."));
+    e.append(el("span", "spin"));
+    e.append(el("div", null, "Loading stock…"));
     v.append(e);
     return v;
   }
   if (!S.rows.length) {
     const e = el("div", "empty");
-    e.append(el("b", null, "No parcel matches that"));
-    e.append(document.createTextNode("Check the barcode, or try part of the customer's name."));
+    e.append(el("b", null, "Nothing matches"));
+    e.append(document.createTextNode(anyFilter()
+      ? "Clear a filter, or search for something else."
+      : "No parcels yet."));
     v.append(e);
     return v;
   }
@@ -857,9 +912,130 @@ function vRecords() {
   const list = el("div", "list");
   for (const r of S.rows) list.append(recordRow(r));
   v.append(list);
-  if (S.rows.length === 50)
-    v.append(banner(null, "Showing the first 50", "Narrow the search to see fewer."));
+  v.append(pager());
   return v;
+}
+
+const anyFilter = () =>
+  !!(S.q.trim() || S.filters.status || S.filters.zone || S.filters.paid || S.filters.here);
+
+function stockTiles() {
+  const wrap = el("div", "tiles");
+  const s = S.stats;
+  const tile = (k, label, val, note, on) => {
+    const b = el("button", "tile" + (on ? " on" : ""));
+    b.append(el("div", "k", label), el("div", "v", val));
+    if (note) b.append(el("div", "n", note));
+    b.onclick = () => {
+      const f = S.filters;
+      if (!k) S.filters = { status: "", zone: f.zone, paid: "", here: f.here };
+      else if (k === "unpaid" || k === "late" || k === "long")
+        S.filters = { ...f, paid: f.paid === k ? "" : k };
+      else S.filters = { ...f, status: f.status === k ? "" : k };
+      S.page = 0;
+      loadStock();
+    };
+    return b;
+  };
+  if (!s) {
+    const b = el("div", "tile");
+    b.append(el("div", "k", "Counting"), el("div", "v", "…"));
+    wrap.append(b);
+    return wrap;
+  }
+  const f = S.filters;
+  const n = x => nf0.format(Number(x) || 0);
+  wrap.append(
+    tile("", "All parcels", n(s.total), null, !f.status && !f.paid),
+    tile("expected", "On the way", n(s.expected), "still in transit", f.status === "expected"),
+    tile("received", "In the warehouse", n(s.received), "not on a shelf", f.status === "received"),
+    tile("shelved", "On shelves", n(s.shelved), "located", f.status === "shelved"),
+    tile("released", "Out for delivery", n(s.released), "with a driver", f.status === "released"),
+    tile("delivered", "Delivered", n(s.delivered), "handed over", f.status === "delivered"),
+    tile("late", "Over free days", n(s.late_count), "past " + s.free_days + " days", f.paid === "late"),
+    tile("long", "Here too long", n(s.long_count),
+      s.long_stay_days + "+ days" + (s.long_owed != null ? " · " + money(s.long_owed) + " owed" : ""),
+      f.paid === "long"),
+  );
+  /* No money tile for a scanner: the figures are not theirs and the database
+     would hand back nulls anyway. */
+  if (sees_money())
+    wrap.append(tile("unpaid", "Unpaid", money(s.unpaid_amount),
+      n(s.unpaid_count) + " parcel" + (Number(s.unpaid_count) === 1 ? "" : "s"), f.paid === "unpaid"));
+  return wrap;
+}
+
+function stockFilters() {
+  const bar = el("form", "row");
+  bar.style.marginBottom = "14px";
+
+  const q = el("input", "inp mono");
+  q.placeholder = "Barcode, customer, phone, shelf or shipment…";
+  q.value = S.q;
+  q.autocomplete = "off";
+  q.style.flex = "1 1 240px";
+  bar.append(q);
+
+  const zs = el("select", "inp");
+  zs.style.width = "auto";
+  const any = el("option", null, "Anywhere");
+  any.value = "";
+  zs.append(any);
+  for (const z of S.zones) {
+    const o = el("option", null, z.label || z.code);
+    o.value = z.code;
+    if (z.code === S.filters.zone) o.selected = true;
+    zs.append(o);
+  }
+  /* Choosing a zone here is a plain zone filter. Only a zone card asks for
+     "what is in it now", so picking from this list drops that. */
+  zs.onchange = () => {
+    S.filters = { ...S.filters, zone: zs.value, here: false };
+    S.page = 0; loadStock();
+  };
+  bar.append(zs);
+
+  if (S.filters.here) {
+    const chip = el("span", "chip admin", "in the building");
+    bar.append(chip);
+  }
+
+  const go = el("button", "btn pri", "Search");
+  go.type = "submit";
+  bar.append(go);
+
+  if (anyFilter()) {
+    const clr = el("button", "btn", "Clear");
+    clr.type = "button";
+    clr.onclick = () => {
+      S.q = ""; S.filters = { status: "", zone: "", paid: "" }; S.page = 0; loadStock();
+    };
+    bar.append(clr);
+  }
+  bar.addEventListener("submit", ev => {
+    ev.preventDefault();
+    S.q = q.value; S.page = 0; loadStock();
+  });
+  return bar;
+}
+
+function pager() {
+  const from = S.page * S.pageSize;
+  const to = Math.min(from + S.rows.length, S.total);
+  const w = el("div", "row");
+  w.style.marginTop = "12px";
+  w.append(el("span", "li-s", nf0.format(from + 1) + "–" + nf0.format(to) +
+    " of " + nf0.format(S.total)));
+  const prev = el("button", "btn sm", "Back");
+  prev.disabled = S.page === 0;
+  prev.onclick = () => { S.page--; loadStock(); };
+  const next = el("button", "btn sm", "Next");
+  next.disabled = to >= S.total;
+  next.onclick = () => { S.page++; loadStock(); };
+  const sp = el("span");
+  sp.style.marginLeft = "auto";
+  w.append(sp, prev, next);
+  return w;
 }
 
 function recordRow(r) {
@@ -885,31 +1061,154 @@ function recordRow(r) {
     a.append(c);
     a.append(el("span", "chip " + (r.paid ? "s-delivered" : "off"), r.paid ? "Paid" : "Unpaid"));
   }
-  if (r.shipped_at) a.append(el("span", "li-s", "shipped " + fmtDate(r.shipped_at)));
+  if (r.age_days != null && (r.status === "shelved" || r.status === "received"))
+    a.append(el("span", "li-s", "held " + nf0.format(r.age_days) + " days"));
+  else if (r.shipped_at)
+    a.append(el("span", "li-s", "shipped " + fmtDate(r.shipped_at)));
   li.append(a);
   return li;
 }
 
-async function search() {
-  const term = S.q.trim();
-  if (!term) { S.rows = null; render(); return; }
+async function loadStock() {
   S.searching = true; render();
-  const like = "%" + term.replace(/[%,]/g, " ") + "%";
-  const { data, error } = await S.sb
-    .from("parcels_view")
-    .select("barcode,name,customer,phone,shipment,status,zone,shelf,cost,paid,shipped_at")
-    .or([
+  const f = S.filters;
+  let qy = S.sb.from("parcels_view")
+    .select("barcode,name,customer,phone,shipment,status,zone,shelf,cost,paid,shipped_at,age_days",
+      { count: "exact" });
+
+  if (f.status) qy = qy.eq("status", f.status);
+  if (f.zone) qy = qy.eq("zone", f.zone);
+  if (f.here) qy = qy.not("status", "in", "(released,delivered)");
+
+  /* "Still here" is what the late and long-stay counts mean, so the list has
+     to agree with the tile it came from. */
+  const free = (S.stats && S.stats.free_days) || 14;
+  const long = (S.stats && S.stats.long_stay_days) || 90;
+  if (f.paid === "late") qy = qy.in("status", ["shelved", "received"]).gt("age_days", free);
+  if (f.paid === "long") qy = qy.in("status", ["shelved", "received"]).gte("age_days", long);
+  if (f.paid === "unpaid") qy = qy.eq("paid", false).neq("status", "expected");
+
+  const term = S.q.trim();
+  if (term) {
+    const like = "%" + term.replace(/[%,()]/g, " ") + "%";
+    qy = qy.or([
       "barcode.ilike." + like,
       "customer.ilike." + like,
       "phone.ilike." + like,
       "shelf.ilike." + like,
       "shipment.ilike." + like,
-    ].join(","))
-    .order("barcode")
-    .limit(50);
+    ].join(","));
+  }
+
+  const from = S.page * S.pageSize;
+  const { data, error, count } = await qy
+    .order("updated_at", { ascending: false }).order("barcode")
+    .range(from, from + S.pageSize - 1);
+
   S.searching = false;
-  if (error) { toast(error.message, "bad"); S.rows = []; render(); return; }
+  if (error) {
+    toast(error.message, "bad");
+    S.rows = [];
+    render();
+    return;
+  }
   S.rows = data || [];
+  S.total = count || 0;
+  /* A filter change can leave the page past the end — step back rather than
+     show an empty list that looks like "nothing matches". */
+  if (!S.rows.length && S.total > 0 && S.page > 0) {
+    S.page = Math.max(0, Math.ceil(S.total / S.pageSize) - 1);
+    return loadStock();
+  }
+  render();
+}
+
+async function loadStats() {
+  const { data, error } = await S.sb.rpc("stock_summary");
+  if (error) { toast("Could not count the stock — " + error.message, "bad"); return; }
+  S.stats = (data && data[0]) || null;
+  render();
+}
+
+/* ----------------------------------------------------------------- zones --- */
+function vZones() {
+  const v = el("section");
+  const head = el("div", "vhead");
+  const h = el("div");
+  h.append(el("h2", null, "Zones"));
+  h.append(el("div", "sub", "How the floor is divided. Shelf zones hold located stock; " +
+    "staging areas are inside the warehouse but not on shelves."));
+  head.append(h);
+  v.append(head);
+
+  if (!S.zoneStats) {
+    const e = el("div", "empty");
+    e.append(el("span", "spin"));
+    e.append(el("div", null, "Counting the floor…"));
+    v.append(e);
+    return v;
+  }
+
+  for (const kind of ["shelf", "staging"]) {
+    const zs = S.zoneStats.filter(z => z.kind === kind);
+    if (!zs.length) continue;
+    const hr = el("div", "hr-t");
+    hr.append(el("span", "sect-t", kind === "shelf" ? "Shelf zones"
+      : "Staging areas — in the warehouse, not on shelves"));
+    v.append(hr);
+    const g = el("div", "zgrid");
+    for (const z of zs) g.append(zoneCard(z));
+    v.append(g);
+  }
+  return v;
+}
+
+function zoneCard(z) {
+  const b = el("button", "zcard");
+  const t = el("div", "zt");
+  t.append(el("span", "zc", z.code));
+  t.append(el("span", "zn", z.label || z.code));
+  b.append(t);
+  b.append(el("div", "zv", nf0.format(Number(z.parcels) || 0)));
+  b.append(el("div", "sub2", z.kind === "shelf" ? "parcels on these shelves" : "parcels in this area"));
+
+  const racks = Number(z.racks) || 0, levels = Number(z.levels) || 0;
+  const slots = racks * levels, used = Number(z.locations_used) || 0;
+  const cap = Number(z.capacity) || 0;
+  if (slots) {
+    b.append(el("div", "sub2", racks + " racks × " + levels + " levels · " +
+      nf0.format(used) + " of " + nf0.format(slots) + " locations in use"));
+    b.append(bar(Math.min(100, used / slots * 100), used / slots >= .9));
+  } else if (cap) {
+    b.append(el("div", "sub2", nf0.format(cap) + " fits here"));
+    b.append(bar(Math.min(100, (Number(z.parcels) || 0) / cap * 100),
+      (Number(z.parcels) || 0) / cap >= .9, true));
+  }
+  if (z.note) b.append(el("div", "sub2", z.note));
+  /* The card counts what is actually in the zone, so the list it opens has to
+     agree with it — a parcel that has gone out with a driver still carries the
+     zone it was picked from, and would otherwise make the list one longer than
+     the number just tapped. */
+  b.onclick = () => {
+    S.filters = { status: "", zone: z.code, paid: "", here: true };
+    S.q = ""; S.page = 0; S.tab = "stock";
+    loadStock();
+  };
+  return b;
+}
+
+function bar(pct, hot, staging) {
+  const w = el("div", "zbar" + (hot ? " hot" : "") + (staging ? " stg" : ""));
+  const i = el("i");
+  i.style.width = pct + "%";
+  w.append(i);
+  return w;
+}
+
+async function loadZoneStats() {
+  const { data, error } = await S.sb.rpc("zone_summary");
+  if (error) { toast("Could not read the zones — " + error.message, "bad"); return; }
+  S.zoneStats = data || [];
   render();
 }
 
@@ -1163,7 +1462,8 @@ function render() {
   if (!S.session) { app.replaceChildren(vSignIn()); return; }
   if (!S.me) { app.replaceChildren(vNoAccess()); return; }
   const view = S.tab === "staff" && isAdmin() ? vStaff()
-             : S.tab === "records" ? vRecords()
+             : S.tab === "stock" ? vStock()
+             : S.tab === "zones" ? vZones()
              : vScan();
   app.replaceChildren(shell(view));
 }
@@ -1188,7 +1488,7 @@ async function boot() {
   S.session = data.session || null;
   if (S.session) await loadMe();
   render();
-  if (S.me) loadZones();
+  if (S.me) { loadZones(); loadStats(); }
   if (isAdmin()) loadStaff();
 
   S.sb.auth.onAuthStateChange(async (evt, session) => {
@@ -1197,9 +1497,11 @@ async function boot() {
     if ((S.session?.user?.id || null) !== was) {
       S.me = null; S.staff = []; S.rows = null;
       S.zones = []; S.scanFeed = []; S.undo = null; S.dest = { zone: "", shelf: "" };
+      S.stats = null; S.zoneStats = null; S.page = 0; S.q = "";
+      S.filters = { status: "", zone: "", paid: "" };
       if (S.session) await loadMe();
       render();
-      if (S.me) loadZones();
+      if (S.me) { loadZones(); loadStats(); }
       if (isAdmin()) loadStaff();
     }
   });

@@ -135,19 +135,54 @@ mod += `
   S.undo = { barcode:"YT7600000000001", name:"a parcel", before:{ status:"received", zone:"SHIP", shelf:null } };
   build("scan-with-feed", () => vScan());
 
-  // Records, twice. The two row sets are what the DATABASE actually hands
-  // each role back: the view nulls the money columns for a scanner, so the
-  // app never has to decide whether to draw them.
-  S.tab = "records"; S.q = "pierre";
+  // Stock, twice. The two row sets and the two summaries are what the
+  // DATABASE actually hands each role back: the money is null for a scanner,
+  // so the app never has to decide whether to draw it.
+  const summary = {
+    total:8232, expected:4625, received:1884, shelved:1600, released:63, delivered:60,
+    late_count:3475, long_count:1049, free_days:14, long_stay_days:90,
+    unpaid_count:2703, unpaid_amount:39344.95, long_owed:11503.55,
+  };
+  S.tab = "stock"; S.q = "pierre"; S.total = 2; S.page = 0;
+  S.stats = { ...summary, unpaid_count:null, unpaid_amount:null, long_owed:null };
   S.rows = rows.map(r => ({ ...r, cost:null, paid:null }));
-  build("records-scanner", () => vRecords());
+  build("stock-scanner", () => vStock());
+
   S.me = { id:"u2", name:"Office", role:"office", active:true };
+  S.stats = summary;
   S.rows = rows;
-  build("records-office", () => vRecords());
-  S.rows = []; build("records-empty", () => vRecords());
-  S.rows = null; build("records-unsearched", () => vRecords());
-  S.searching = true; build("records-searching", () => vRecords());
+  build("stock-office", () => vStock());
+
+  S.filters = { status:"shelved", zone:"C", paid:"long" };
+  build("stock-filtered", () => vStock());
+  /* what a tap on a zone card leaves behind */
+  S.filters = { status:"", zone:"C", paid:"", here:true };
+  build("stock-from-zone-card", () => vStock());
+  S.filters = { status:"", zone:"", paid:"" }; S.q = "";
+  S.rows = []; build("stock-nothing-matches", () => vStock());
+  S.rows = null; build("stock-loading", () => vStock());
+  S.rows = rows; S.searching = true; build("stock-searching", () => vStock());
   S.searching = false;
+  S.stats = null; build("stock-counting", () => vStock());
+  S.stats = summary;
+
+  // paging: a middle page must offer both directions
+  S.total = 8232; S.page = 3; S.pageSize = 50;
+  build("stock-paged", () => vStock());
+  S.page = 0; S.total = 2;
+
+  // zones
+  S.tab = "zones";
+  S.zoneStats = [
+    { code:"A", label:"Zone A", kind:"shelf", racks:10, levels:5, capacity:0,
+      note:"A1-01-01 to A10-01-05", sort:1, parcels:412, locations_used:44 },
+    { code:"C", label:"Zone C", kind:"shelf", racks:22, levels:5, capacity:0,
+      note:null, sort:3, parcels:489, locations_used:99 },
+    { code:"SHIP", label:"Shipping department", kind:"staging", racks:null, levels:null,
+      capacity:300, note:"Waiting to be put on shelves", sort:6, parcels:1884, locations_used:0 },
+  ];
+  build("zones", () => vZones());
+  S.zoneStats = null; build("zones-loading", () => vZones());
 
   // staff
   S.me = { id:"u3", name:"Hadi", role:"admin", active:true };
@@ -196,15 +231,32 @@ expect("scan-shelve", "onto a shelf");
 expect("scan-with-shelf", "C18-01-01");
 expect("scan-with-feed", "Undo");
 expect("scan-with-feed", "racks 1–24");
-expect("records-office", "$25.01");
-expect("records-scanner", "C18-01-01");
+expect("stock-office", "$25.01");
+expect("stock-office", "Unpaid");
+expect("stock-office", "$39,344.95");
+expect("stock-scanner", "C18-01-01");
+expect("stock-scanner", "On shelves");
+expect("stock-office", "Over free days");
+expect("stock-office", "past 14 days");
+expect("stock-office", "90+ days");
+expect("stock-filtered", "Clear");
+expect("stock-from-zone-card", "in the building");
+expect("stock-nothing-matches", "Nothing matches");
+/* The fixture puts two rows on page 4, so the pager counts the rows actually
+   on screen rather than assuming a full page. */
+expect("stock-paged", "151–152 of 8,232");
+expect("zones", "Zone C");
+expect("zones", "22 racks × 5 levels · 99 of 110 locations in use");
+expect("zones", "Staging areas");
 expect("staff", "Ali Nasser");
 expect("staff", "Turned off");
 
-/* The money must not appear for a scanner, however the view is built. */
-const scannerText = (out["records-scanner"] || {}).text || "";
-if (/25\.01|\$/.test(scannerText)) {
-  fail++; console.log("  FAIL  records-scanner shows money: " + scannerText.slice(0, 200));
+/* The money must not appear for a scanner, however the view is built: not in
+   a row, and not in a tile either. */
+const scannerText = (out["stock-scanner"] || {}).text || "";
+if (/\$|25\.01|39,344|11,503|Unpaid/.test(scannerText)) {
+  fail++; console.log("  FAIL  stock-scanner shows money: " +
+    scannerText.replace(/\s+/g, " ").slice(0, 240));
 } else pass++;
 
 console.log("\n" + Object.keys(out).length + " views built, " + pass + " checks passed, " + fail + " failed");
