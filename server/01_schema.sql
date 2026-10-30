@@ -95,12 +95,15 @@ create index parcels_shipment_idx on parcels (shipment);
 create index parcels_unpaid_idx   on parcels (paid)      where paid = false;
 create index parcels_shipped_idx  on parcels (shipped_at);
 
--- free text across the fields people actually search by
+-- Free text across the fields people actually search by. The two id columns
+-- belong here as much as the barcode does: the label carries an item id and the
+-- client has an id of their own, and both are typed into the find box.
 create index parcels_search_idx on parcels using gin (
   to_tsvector('simple',
-    coalesce(barcode,'') || ' ' || coalesce(customer,'') || ' ' ||
-    coalesce(phone,'')   || ' ' || coalesce(shelf,'')    || ' ' ||
-    coalesce(name,'')    || ' ' || coalesce(shipment,''))
+    coalesce(barcode,'')   || ' ' || coalesce(customer,'') || ' ' ||
+    coalesce(phone,'')     || ' ' || coalesce(shelf,'')    || ' ' ||
+    coalesce(name,'')      || ' ' || coalesce(shipment,'') || ' ' ||
+    coalesce(item_id,'')   || ' ' || coalesce(client_id,''))
 );
 
 -- -------------------------------------------------------------- history ----

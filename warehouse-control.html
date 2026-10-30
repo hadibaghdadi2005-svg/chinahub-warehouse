@@ -782,6 +782,26 @@ function matchesFilters(it, skip){
 /* every item the current filters allow, ignoring one facet */
 const sliceBut = skip => allItems().filter(it => matchesFilters(it, skip));
 
+/* The ids a parcel can be called by. The order number is the barcode, but the
+   label also carries an item id, the client has an id of their own, and the
+   shipment code identifies the consignment it travels in. */
+const ID_FIELDS = ["barcode","itemId","clientId","parcel"];
+
+/* Enter in the find box opens a record outright, which only helps if it resolves
+   any of those, not just the barcode. Exact matches only, and only when they
+   single out one parcel — a client id covers a whole consignment, so those stay
+   on screen as the filtered list instead of opening an arbitrary member. */
+function findOne(text){
+  const v = normBc(text);
+  if(!v) return null;
+  const direct = S.items.get(docId(v));
+  if(direct) return direct;
+  const low = v.toLowerCase();
+  const hits = allItems().filter(it =>
+    ID_FIELDS.some(f => String(it[f] || "").trim().toLowerCase() === low));
+  return hits.length === 1 ? hits[0] : null;
+}
+
 /* what a set of items is worth: billed, settled, and still owed */
 function moneyOf(list){
   let charged = 0, settled = 0, owed = 0, n = 0;
@@ -3365,11 +3385,19 @@ function wireChrome(){
   try{ const b = localStorage.getItem("ch.beep"); if(b==="0"){ S.beep=false; bb.setAttribute("aria-pressed","false"); } }catch(_){}
 
   const q = $("#quick");
-  q.addEventListener("input", () => { S.filters.q = q.value; if(S.tab!=="stock"){ S.tab="stock"; renderTabs(); } render(); q.focus(); });
+  /* This box finds across the whole warehouse, so it drops the chips and
+     drill-ins first. Left in place they narrow the search to the slice already on
+     screen: pick On shelf or open a shipment, then look up an id, and a parcel
+     that is plainly in stock reads as missing. The box in the Stock toolbar is
+     the one that refines a slice. */
+  q.addEventListener("input", () => {
+    S.filters = { status:"", zone:"", paid:"", q:q.value, parcel:"" };
+    if(S.tab!=="stock"){ S.tab="stock"; renderTabs(); }
+    render(); q.focus();
+  });
   q.addEventListener("keydown", e => {
     if(e.key!=="Enter") return;
-    const v2 = normBc(q.value); if(!v2) return;
-    const hit = S.items.get(docId(v2)) || allItems().find(i => i.barcode.toLowerCase()===v2.toLowerCase());
+    const hit = findOne(q.value);
     if(hit) openDrawer(hit.id);
   });
 
