@@ -134,3 +134,28 @@ grant select on parcels_view to authenticated;
 --   values ('<auth user id>', 'Hadi', 'admin');
 --
 -- After that, admins create everyone else from inside the app.
+
+-- ---------------------------------------------------------------- notes ----
+-- Applied and tested on the live database, 30 Oct 2026. Fifteen checks, each
+-- run as a real signed-in user of that role:
+--
+--   scanner   moves a parcel                 allowed
+--             changes a charge               refused by the trigger
+--             changes paid                   refused by the trigger
+--             edits a client's phone         refused by the trigger
+--             reads the rates                invisible
+--             creates a parcel               refused
+--             deletes a parcel               filtered to zero rows
+--   office    prices and takes payment       allowed
+--             reads the rates                visible
+--             creates an account             refused
+--             promotes itself to admin       refused
+--             changes the rates              filtered to zero rows
+--   admin     changes the rates              allowed
+--             creates an account             allowed
+--   stranger  signed in, no profile          sees nothing
+--
+-- Worth knowing for anyone writing more tests here: row-level security does
+-- not raise on a write it disallows, it narrows the rows to none. A test that
+-- treats "no exception" as "allowed" will report false failures — mine did,
+-- twice, until the rows themselves were checked.
