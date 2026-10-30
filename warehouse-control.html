@@ -88,8 +88,9 @@ button{cursor:pointer}
   width:100%;padding:7px 10px 7px 30px;border:1px solid var(--line);border-radius:var(--r-sm);
   background:var(--bg);font-size:13px;
 }
-@media (max-width:479px){.brand-tx{display:none}}
 #quick:focus{border-color:var(--primary);background:var(--surface)}
+/* what gives way so the box above keeps a usable width */
+@media (max-width:479px){.brand-tx{display:none}}
 .iconbtn{
   width:33px;height:33px;flex:none;display:grid;place-items:center;border:1px solid var(--line);
   border-radius:var(--r-sm);background:var(--surface);color:var(--fg-dim);
