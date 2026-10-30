@@ -170,6 +170,23 @@ select.inp{appearance:none;background-image:linear-gradient(45deg,transparent 49
 .li-a{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
 .me{font-size:11px;color:var(--fg-faint);font-weight:600}
 
+/* ---------- scan station ---------- */
+.modes{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;margin-bottom:12px}
+@media (max-width:620px){.modes{grid-template-columns:repeat(2,1fr)}}
+.mode{
+  display:flex;flex-direction:column;gap:1px;align-items:flex-start;text-align:left;
+  border:1px solid var(--line-strong);background:var(--surface);border-radius:var(--r-sm);
+  padding:9px 11px;min-height:54px;
+}
+.mode:hover{background:var(--surface-2)}
+.mode b{font-size:14px;font-weight:700}
+.mode span{font-size:11.5px;color:var(--fg-dim);line-height:1.25}
+.mode.on{background:var(--primary);border-color:var(--primary);color:var(--primary-fg)}
+.mode.on span{color:color-mix(in srgb,var(--primary-fg) 78%,transparent)}
+.scanbox{display:flex;gap:8px;margin-bottom:4px}
+.scanbox .inp{flex:1;font-size:19px;min-height:54px;letter-spacing:.02em}
+.scanbox .btn{min-height:54px;padding-inline:20px}
+
 /* ---------- toasts ---------- */
 .toasts{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(18px + env(safe-area-inset-bottom,0px));z-index:90;display:flex;flex-direction:column;gap:8px;width:min(440px,calc(100vw - 32px))}
 .toast{
@@ -213,16 +230,37 @@ const STATUS = {
   delivered: "Delivered",
 };
 
+/* What a scan does. `to` is the status it moves a parcel into; lookup moves
+   nothing and is the safe one to leave the gun sitting in. */
+const MODES = {
+  receive: { label: "Receive", sub: "arrived at the hub",  to: "received",  verb: "Received" },
+  shelve:  { label: "Put away", sub: "onto a shelf",       to: "shelved",   verb: "Shelved" },
+  release: { label: "Release", sub: "to a driver",         to: "released",  verb: "Released" },
+  deliver: { label: "Deliver", sub: "to the customer",     to: "delivered", verb: "Delivered" },
+  lookup:  { label: "Look up", sub: "changes nothing",     to: null,        verb: "Found" },
+};
+const SCANFEED_MAX = 14;
+
 const S = {
   sb: null,
   session: null,
   me: null,            /* own profiles row, or null when there is none */
-  tab: "records",
+  tab: "scan",
   staff: [],
   busy: false,
   q: "",
   rows: null,          /* last search result, null before the first search */
   searching: false,
+
+  /* scan station */
+  zones: [],
+  mode: "lookup",
+  dest: { zone: "", shelf: "" },   /* where "put away" is currently filing to */
+  recvZone: "SHIP",                /* where a receive scan lands */
+  scanFeed: [],
+  undo: null,                      /* the last move, so one misfire is cheap */
+  beep: true,
+  scanBusy: false,
 };
 
 /* ------------------------------------------------------------- helpers ---- */
@@ -396,13 +434,374 @@ function shell(view) {
 }
 
 function visibleTabs() {
-  const t = [{ id: "records", label: "Records" }];
+  const t = [{ id: "scan", label: "Scan" }, { id: "records", label: "Records" }];
   if (isAdmin()) t.push({ id: "staff", label: "Staff" });
   return t;
 }
 
 function roleChip(role) {
   return el("span", "chip " + role, (ROLES[role] || {}).label || role);
+}
+
+/* ---------------------------------------------------------- scan station --- */
+/* A gun types a barcode and presses Enter, so the whole station is one text
+   field that must never lose focus, and a sound for each outcome — nobody
+   watches the screen while putting a parcel on a shelf. */
+
+const normBc = s => String(s || "").trim().replace(/\s+/g, " ");
+
+/* While putting away, a code that is not a parcel is a shelf label. Shelves
+   carry whatever barcodes the warehouse printed, so they are recognised by
+   what they are NOT — a dashboard parcel number — rather than by a pattern. */
+function looksLikeParcelNo(code) {
+  const s = String(code || "");
+  if (s.length < 11) return false;
+  return (s.replace(/\D/g, "").length / s.length) > 0.7;
+}
+
+/* A shelf code opens with its zone letter and rack number — A1-01-03 is zone
+   A, rack 1 — so match the leading zone code, longest first. */
+function zoneForShelf(code) {
+  const first = String(code || "").toUpperCase().split(/[-/_. ]/)[0];
+  const z = S.zones
+    .filter(x => x.kind === "shelf" && x.code)
+    .sort((a, b) => b.code.length - a.code.length)
+    .find(x => first.startsWith(x.code.toUpperCase()));
+  return z ? z.code : "";
+}
+
+/* Shelf codes run {zone}{rack}-01-{level}. Catch a misread pointing at a rack
+   or level the zone does not have, rather than filing parcels onto a shelf
+   that is not there. Codes in any other shape are taken as given. */
+function shelfOutOfRange(code) {
+  const m = String(code || "").toUpperCase().match(/^([A-Z]+)(\d+)-(\d+)-(\d+)$/);
+  if (!m) return "";
+  const z = S.zones.find(x => (x.code || "").toUpperCase() === m[1]);
+  if (!z || z.kind !== "shelf") return "";
+  const racks = Number(z.racks) || 0, levels = Number(z.levels) || 0;
+  const rack = +m[2], level = +m[4];
+  if (racks && (rack < 1 || rack > racks))
+    return "Zone " + z.code + " has racks 1–" + racks + ", not " + rack + " — rescan the shelf label";
+  if (levels && (level < 1 || level > levels))
+    return "Zone " + z.code + " has levels 1–" + levels + ", not " + level + " — rescan the shelf label";
+  return "";
+}
+
+let AC = null;
+function ping(ok) {
+  if (!S.beep) return;
+  try {
+    AC = AC || new (window.AudioContext || window.webkitAudioContext)();
+    if (AC.state === "suspended") AC.resume();
+    const o = AC.createOscillator(), g = AC.createGain();
+    o.type = "square";
+    o.frequency.value = ok ? 1180 : 360;
+    o.connect(g); g.connect(AC.destination);
+    const t = AC.currentTime;
+    g.gain.setValueAtTime(.05, t);
+    g.gain.exponentialRampToValueAtTime(.0001, t + (ok ? .09 : .22));
+    o.start(t); o.stop(t + (ok ? .1 : .24));
+  } catch (_) {}
+}
+
+const focusScan = () => { const i = $("#scanin"); if (i) { i.focus(); i.select?.(); } };
+
+function feedPush(kind, bc, msg, undoable) {
+  S.scanFeed = [{ kind, bc, msg, t: Date.now(), undoable: !!undoable }, ...S.scanFeed]
+    .slice(0, SCANFEED_MAX);
+}
+
+/* One parcel, by barcode, with the money masked to whatever the reader is
+   allowed. Returns undefined when there is no such parcel. */
+async function findParcel(bc) {
+  const { data, error } = await S.sb.from("parcels_view")
+    .select("barcode,name,customer,status,zone,shelf,shipment,cost,paid")
+    .eq("barcode", bc).maybeSingle();
+  if (error) throw error;
+  return data || undefined;
+}
+
+/* Has this shelf been used before? Only needs to know yes or no, so it asks
+   for one row rather than counting them. */
+async function shelfSeen(code) {
+  const { data } = await S.sb.from("parcels_view")
+    .select("barcode,zone").eq("shelf", code).limit(1);
+  return (data && data[0]) || null;
+}
+
+/* The move itself: the parcel's new state, then a line in its history. The
+   history is written second on purpose — if it fails, the parcel has still
+   moved, and a missing history line is better than a parcel the system thinks
+   is somewhere it is not. */
+async function moveParcel(p, to, loc, note) {
+  const patch = {};
+  if (to) patch.status = to;
+  if (loc) {
+    if (loc.zone != null) patch.zone = loc.zone || null;
+    if (loc.shelf != null) patch.shelf = loc.shelf || null;
+  }
+  const nowIso = new Date().toISOString();
+  if (to === "received") patch.received_at = nowIso;
+  if (to === "shelved") patch.shelved_at = nowIso;
+  if (to === "released") patch.released_at = nowIso;
+  if (to === "delivered") patch.delivered_at = nowIso;
+
+  const { error } = await S.sb.from("parcels").update(patch).eq("barcode", p.barcode);
+  if (error) throw error;
+
+  const where = patch.shelf || patch.zone || p.shelf || p.zone || null;
+  await S.sb.from("parcel_events").insert({
+    barcode: p.barcode, at: nowIso, actor: S.me.id,
+    from_status: p.status, to_status: to || p.status,
+    loc: where, note: note || null,
+  });
+  return { before: { status: p.status, zone: p.zone, shelf: p.shelf } };
+}
+
+async function handleScan(raw) {
+  const bc = normBc(raw);
+  if (!bc) return;
+  S.scanBusy = true; render();
+  try {
+    let known;
+    try { known = await findParcel(bc); }
+    catch (e) { ping(false); feedPush("bad", bc, "Could not reach the database — try again"); return; }
+
+    /* Putting away: an unknown code is a shelf label or a zone. */
+    if (S.mode === "shelve" && !known) {
+      const up = bc.toUpperCase();
+      const zone = S.zones.find(z => z.code.toUpperCase() === up);
+      if (zone) {
+        S.dest = { zone: zone.code, shelf: "" };
+        ping(true); feedPush("ok", bc, "Filing to zone " + zone.code);
+        return;
+      }
+      if (!looksLikeParcelNo(up)) {
+        const bad = shelfOutOfRange(up);
+        if (bad) { ping(false); feedPush("bad", bc, bad); return; }
+        const seen = await shelfSeen(up.replace(/\//g, "-"));
+        S.dest = {
+          zone: (seen && seen.zone) || zoneForShelf(up) || S.dest.zone,
+          shelf: up.replace(/\//g, "-"),
+        };
+        ping(true);
+        feedPush("ok", bc, (seen ? "Shelf " : "New shelf ") + S.dest.shelf +
+          " — now scan the parcels going here");
+        return;
+      }
+    }
+
+    if (!known) {
+      ping(false);
+      feedPush("bad", bc, sees_money()
+        ? "No parcel with this barcode"
+        : "No parcel with this barcode — the office adds new ones");
+      return;
+    }
+
+    if (S.mode === "lookup") {
+      ping(true);
+      feedPush("ok", bc, (known.name || "Parcel") + " · " + (STATUS[known.status] || known.status) +
+        (known.shelf ? " at " + known.shelf : known.zone ? " in " + known.zone : "") +
+        (known.customer ? " · for " + known.customer : ""));
+      return;
+    }
+
+    const to = MODES[S.mode].to;
+    if (known.status === to) {
+      ping(false);
+      feedPush("warn", bc, (known.name || "This parcel") + " is already " +
+        (STATUS[to] || to).toLowerCase());
+      return;
+    }
+
+    let loc = null;
+    if (S.mode === "shelve") {
+      if (!S.dest.zone && !S.dest.shelf) {
+        ping(false); feedPush("bad", bc, "Scan a shelf label first, or pick a zone");
+        return;
+      }
+      loc = { zone: S.dest.zone, shelf: S.dest.shelf };
+    }
+    if (S.mode === "receive") loc = { zone: S.recvZone || "", shelf: "" };
+    if (S.mode === "release" || S.mode === "deliver") loc = { shelf: "" };
+
+    try {
+      const res = await moveParcel(known, to, loc);
+      S.undo = { barcode: bc, name: known.name, before: res.before };
+      ping(true);
+      const where = S.mode === "shelve" ? " → " + (S.dest.shelf || S.dest.zone)
+                  : S.mode === "receive" && S.recvZone ? " → " + S.recvZone : "";
+      feedPush("ok", bc, MODES[S.mode].verb + ": " + (known.name || "parcel") + where, true);
+    } catch (e) {
+      ping(false);
+      /* The trigger's own words are better than anything generic. */
+      feedPush("bad", bc, (e && e.message) || "Could not save — try again");
+    }
+  } finally {
+    S.scanBusy = false;
+    render();
+    focusScan();
+  }
+}
+
+async function doUndo() {
+  const u = S.undo;
+  if (!u) return;
+  S.undo = null;
+  try {
+    const { error } = await S.sb.from("parcels").update({
+      status: u.before.status, zone: u.before.zone || null, shelf: u.before.shelf || null,
+    }).eq("barcode", u.barcode);
+    if (error) throw error;
+    await S.sb.from("parcel_events").insert({
+      barcode: u.barcode, at: new Date().toISOString(), actor: S.me.id,
+      from_status: null, to_status: u.before.status,
+      loc: u.before.shelf || u.before.zone || null, note: "undone by " + S.me.name,
+    });
+    ping(true);
+    feedPush("ok", u.barcode, "Put back to " + (STATUS[u.before.status] || u.before.status));
+  } catch (e) {
+    ping(false);
+    feedPush("bad", u.barcode, "Could not undo — " + ((e && e.message) || "try again"));
+  }
+  render(); focusScan();
+}
+
+function vScan() {
+  const v = el("section");
+
+  const head = el("div", "vhead");
+  const h = el("div");
+  h.append(el("h2", null, "Scan"));
+  h.append(el("div", "sub", MODES[S.mode].label + " — " + MODES[S.mode].sub));
+  head.append(h);
+  const snd = el("button", "btn sm", S.beep ? "Sound on" : "Sound off");
+  snd.style.marginLeft = "auto";
+  snd.onclick = () => { S.beep = !S.beep; if (S.beep) ping(true); render(); focusScan(); };
+  head.append(snd);
+  v.append(head);
+
+  /* mode */
+  const modes = el("div", "modes");
+  for (const k in MODES) {
+    const b = el("button", "mode" + (k === S.mode ? " on" : ""));
+    b.append(el("b", null, MODES[k].label));
+    b.append(el("span", null, MODES[k].sub));
+    b.onclick = () => { S.mode = k; render(); focusScan(); };
+    modes.append(b);
+  }
+  v.append(modes);
+
+  /* where it is going */
+  if (S.mode === "shelve") {
+    const d = el("div", "card pad");
+    d.style.marginBottom = "12px";
+    const r = el("div", "row");
+    r.append(el("span", "li-s", "Filing to"));
+    const now = S.dest.shelf || S.dest.zone;
+    const tag = el("span", "mono", now || "nowhere yet");
+    tag.style.fontSize = "17px";
+    tag.style.fontWeight = "700";
+    if (!now) tag.style.color = "var(--fg-faint)";
+    r.append(tag);
+    const sel = el("select", "inp sm");
+    sel.style.width = "auto"; sel.style.minHeight = "34px"; sel.style.marginLeft = "auto";
+    const none = el("option", null, "pick a zone…"); none.value = "";
+    sel.append(none);
+    for (const z of S.zones) {
+      const o = el("option", null, z.label || z.code);
+      o.value = z.code;
+      if (z.code === S.dest.zone && !S.dest.shelf) o.selected = true;
+      sel.append(o);
+    }
+    sel.onchange = () => { S.dest = { zone: sel.value, shelf: "" }; render(); focusScan(); };
+    r.append(sel);
+    if (now) {
+      const clr = el("button", "btn sm", "Clear");
+      clr.onclick = () => { S.dest = { zone: "", shelf: "" }; render(); focusScan(); };
+      r.append(clr);
+    }
+    d.append(r);
+    d.append(el("div", "li-s", "Scan a shelf label to change it. Every parcel scanned after " +
+      "that goes to this shelf until you scan another."));
+    v.append(d);
+  }
+  if (S.mode === "receive") {
+    const d = el("div", "card pad");
+    d.style.marginBottom = "12px";
+    const r = el("div", "row");
+    r.append(el("span", "li-s", "Landing in"));
+    const sel = el("select", "inp sm");
+    sel.style.width = "auto"; sel.style.minHeight = "34px";
+    for (const z of S.zones.filter(z => z.kind === "staging")) {
+      const o = el("option", null, z.label || z.code);
+      o.value = z.code;
+      if (z.code === S.recvZone) o.selected = true;
+      sel.append(o);
+    }
+    sel.onchange = () => { S.recvZone = sel.value; render(); focusScan(); };
+    r.append(sel);
+    d.append(r);
+    v.append(d);
+  }
+
+  /* the gun */
+  const form = el("form", "scanbox");
+  const inp = el("input", "inp mono");
+  inp.id = "scanin";
+  inp.placeholder = S.mode === "shelve" ? "Scan a shelf label, then parcels…" : "Scan a barcode…";
+  inp.autocomplete = "off"; inp.autocapitalize = "off"; inp.spellcheck = false;
+  inp.enterKeyHint = "go";
+  form.append(inp);
+  const go = el("button", "btn pri", S.scanBusy ? "…" : "Enter");
+  go.type = "submit";
+  go.disabled = !!S.scanBusy;
+  form.append(go);
+  form.addEventListener("submit", ev => {
+    ev.preventDefault();
+    const val = inp.value;
+    inp.value = "";
+    if (!S.scanBusy) handleScan(val);
+  });
+  v.append(form);
+
+  if (S.undo) {
+    const u = el("div", "row");
+    u.style.margin = "10px 0";
+    const b = el("button", "btn", "Undo: " + (S.undo.name || S.undo.barcode).slice(0, 40));
+    b.onclick = doUndo;
+    u.append(b);
+    v.append(u);
+  }
+
+  /* what just happened */
+  if (!S.scanFeed.length) {
+    const e = el("div", "empty");
+    e.append(el("b", null, "Nothing scanned yet"));
+    e.append(document.createTextNode(S.mode === "lookup"
+      ? "Look up changes nothing — scan anything to see where it is."
+      : "Each scan will " + MODES[S.mode].verb.toLowerCase() + " the parcel and show up here."));
+    v.append(e);
+  } else {
+    const list = el("div", "list");
+    for (const f of S.scanFeed) {
+      const li = el("div", "li");
+      const m = el("div", "li-m");
+      const nm = el("div", "li-nm");
+      nm.append(el("span", "mono", f.bc));
+      nm.append(el("span", "chip " + (f.kind === "ok" ? "s-delivered" : f.kind === "warn" ? "s-received" : "off"),
+        f.kind === "ok" ? "Done" : f.kind === "warn" ? "Skipped" : "No"));
+      m.append(nm);
+      m.append(el("div", "li-s", f.msg));
+      li.append(m);
+      li.append(el("span", "li-s", new Date(f.t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })));
+      list.append(li);
+    }
+    v.append(list);
+  }
+  setTimeout(focusScan, 0);
+  return v;
 }
 
 /* --------------------------------------------------------------- records --- */
@@ -585,6 +984,19 @@ function staffRow(p) {
   return li;
 }
 
+async function loadZones() {
+  const { data, error } = await S.sb.from("zones")
+    .select("code,label,kind,racks,levels,capacity,note,sort").order("sort");
+  if (error) { toast("Could not load the zones — " + error.message, "bad"); return; }
+  S.zones = data || [];
+  /* Receive lands in whichever staging zone the warehouse actually has. */
+  if (!S.zones.some(z => z.code === S.recvZone)) {
+    const stg = S.zones.find(z => z.kind === "staging");
+    if (stg) S.recvZone = stg.code;
+  }
+  render();
+}
+
 async function loadStaff() {
   const { data, error } = await S.sb.from("profiles")
     .select("id,name,role,active,created_at")
@@ -750,7 +1162,9 @@ function render() {
   const app = $("#app");
   if (!S.session) { app.replaceChildren(vSignIn()); return; }
   if (!S.me) { app.replaceChildren(vNoAccess()); return; }
-  const view = S.tab === "staff" && isAdmin() ? vStaff() : vRecords();
+  const view = S.tab === "staff" && isAdmin() ? vStaff()
+             : S.tab === "records" ? vRecords()
+             : vScan();
   app.replaceChildren(shell(view));
 }
 
@@ -774,6 +1188,7 @@ async function boot() {
   S.session = data.session || null;
   if (S.session) await loadMe();
   render();
+  if (S.me) loadZones();
   if (isAdmin()) loadStaff();
 
   S.sb.auth.onAuthStateChange(async (evt, session) => {
@@ -781,8 +1196,10 @@ async function boot() {
     S.session = session || null;
     if ((S.session?.user?.id || null) !== was) {
       S.me = null; S.staff = []; S.rows = null;
+      S.zones = []; S.scanFeed = []; S.undo = null; S.dest = { zone: "", shelf: "" };
       if (S.session) await loadMe();
       render();
+      if (S.me) loadZones();
       if (isAdmin()) loadStaff();
     }
   });

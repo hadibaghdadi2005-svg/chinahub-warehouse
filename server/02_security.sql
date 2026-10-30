@@ -130,15 +130,40 @@ create trigger parcels_guard_tr before update on parcels
 -- -------------------------------------------------------------- history ----
 create policy events_read on parcel_events
   for select to authenticated using (my_role() is not null);
+-- History says who did it, so it should not be possible to sign someone
+-- else's name to a move.
 create policy events_insert on parcel_events
-  for insert to authenticated with check (my_role() is not null);
+  for insert to authenticated
+  with check (my_role() is not null and (actor is null or actor = auth.uid()));
 -- history is never edited or removed, by anyone
 
 -- ---------------------------------------------------------------- view ----
--- What the app actually reads. A scanner gets nulls where the money is, so
--- the figures never reach the browser at all.
+-- What the app reads. A scanner gets nulls where the money is.
+--
+-- The view alone was not enough, and it is worth being clear about why. It
+-- masked the figures for anyone who asked through it — but nothing obliged
+-- anyone to ask through it, and `select cost from parcels` handed a scanner
+-- all 8,232 charges. Row-level security could not help: it decides which ROWS
+-- you may see, and a scanner is entitled to every row. So the columns are
+-- taken away at the grant below, and this view is the only way back to them.
+--
+-- Because the columns are revoked, the view can no longer read them as the
+-- caller — office included — so it reads as its owner instead and does both
+-- jobs itself: `my_role() is not null` keeps out anyone with no profile, which
+-- is the closed state row-level security used to provide, and sees_money()
+-- still answers for the CALLER, since auth.uid() comes from the request rather
+-- than from whose privileges are running.
+revoke select on parcels from authenticated, anon;
+grant select (
+  barcode, name, item_id, client_id, customer, phone, shipment,
+  status, zone, shelf, qty, weight_kg, cbm, dims,
+  origin, route, notes,
+  inbound_at, shipped_at, received_at, shelved_at, released_at, delivered_at,
+  updated_at, updated_by
+) on parcels to authenticated;
+
 create or replace view parcels_view
-with (security_invoker = true) as
+with (security_invoker = false) as
 select
   barcode, name, item_id, client_id, customer, phone, shipment,
   status, zone, shelf, qty, weight_kg, cbm, dims,
@@ -152,7 +177,8 @@ select
   case when sees_money() then paid       end as paid,
   case when sees_money() then paid_at    end as paid_at,
   case when sees_money() then pay_method end as pay_method
-from parcels;
+from parcels
+where my_role() is not null;
 
 grant select on parcels_view to authenticated;
 
