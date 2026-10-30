@@ -75,14 +75,20 @@ button{cursor:pointer}
 .brand-tx{min-width:0}
 .brand-tx b{display:block;font-size:14.5px;font-weight:650;letter-spacing:-.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .brand-tx span{display:block;font-size:11px;color:var(--fg-faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.top-act{display:flex;align-items:center;gap:7px;margin-left:auto}
-.qwrap{position:relative;display:none}
-@media (min-width:760px){.qwrap{display:block}}
+.top-act{display:flex;align-items:center;gap:7px;margin-left:auto;min-width:0;flex:1 1 auto;justify-content:flex-end}
+/* The find box stays in the bar at every width. It used to disappear below
+   760px with nothing in the chrome to replace it, which takes the only
+   warehouse-wide search away from anyone working in a narrow window — and an
+   installed app window opens smaller than a maximised browser tab. It shrinks
+   instead, down to a floor that still fits an order number, and the brand text
+   gives way before it does. */
+.qwrap{position:relative;display:block;flex:1 1 210px;min-width:116px;max-width:210px}
 .qwrap svg{position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--fg-faint);pointer-events:none}
 #quick{
-  width:210px;padding:7px 10px 7px 30px;border:1px solid var(--line);border-radius:var(--r-sm);
+  width:100%;padding:7px 10px 7px 30px;border:1px solid var(--line);border-radius:var(--r-sm);
   background:var(--bg);font-size:13px;
 }
+@media (max-width:479px){.brand-tx{display:none}}
 #quick:focus{border-color:var(--primary);background:var(--surface)}
 .iconbtn{
   width:33px;height:33px;flex:none;display:grid;place-items:center;border:1px solid var(--line);
