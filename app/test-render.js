@@ -171,6 +171,52 @@ mod += `
   build("stock-paged", () => vStock());
   S.page = 0; S.total = 2;
 
+  // money — office and admin only
+  S.tab = "money";
+  S.money = {
+    billed:46945.88, owed:39344.95, collected:7600.93,
+    billed_count:3607, unpaid_count:2703, customers:501,
+    unpriced_count:18, unpriced_customers:2, lbp_rate:89500,
+  };
+  S.cfg = { lanes:[
+    { label:"Air · Hong Kong", match:"Air Cargo Hk", basis:"kg", price:16.5 },
+    { label:"Air · Guangzhou", match:"Air Cargo LB", basis:"kg", price:14.5 },
+    { label:"Sea", match:"Sea Cargo", basis:"cbm", price:450 },
+    { label:"Unset lane", match:"Nothing", basis:"kg", price:0 },
+  ] };
+  S.customers = [
+    { client_id:"1000001", customer:"User_EXMPL", phone:"+96170000001",
+      parcels:1185, unpaid:1185, total:22579.10, owed:22579.10,
+      oldest_unpaid_days:98, total_rows:501 },
+    { client_id:"65", customer:"No charge yet", phone:null,
+      parcels:17, unpaid:17, total:0, owed:0,
+      oldest_unpaid_days:140, total_rows:501 },
+  ];
+  S.custTotal = 501; S.custPage = 0; S.custPageSize = 50; S.custOwing = true;
+  build("money", () => vMoney());
+  S.custPage = 2; build("money-paged", () => vMoney());
+  S.custPage = 0;
+  S.customers = []; build("money-none", () => vMoney());
+  S.customers = null; build("money-loading", () => vMoney());
+  S.money = null; build("money-adding-up", () => vMoney());
+
+  // the payment dialog has to build too
+  S.money = { billed:1, owed:1, collected:0, billed_count:1, unpaid_count:1,
+              customers:1, unpriced_count:0, unpriced_customers:0, lbp_rate:89500 };
+  try {
+    askPayment({ client_id:"1000001", customer:"User_EXMPL", unpaid:1185, owed:22579.10 });
+    out["payment-dialog"] = { ok:true, text:document.body.children
+      .map(c => c.textContent).join(" "), cls:"" };
+  } catch (e) { out["payment-dialog"] = { ok:false, err:e && e.message }; }
+
+  // a scanner must not be offered Money at all
+  S.me = { id:"u1", name:"Ali Nasser", role:"scanner", active:true };
+  out["tabs-scanner"] = { ok:true, text: visibleTabs().map(t => t.label).join(" "), cls:"" };
+  S.me = { id:"u2", name:"Office", role:"office", active:true };
+  out["tabs-office"] = { ok:true, text: visibleTabs().map(t => t.label).join(" "), cls:"" };
+  S.me = { id:"u3", name:"Hadi", role:"admin", active:true };
+  out["tabs-admin"] = { ok:true, text: visibleTabs().map(t => t.label).join(" "), cls:"" };
+
   // zones
   S.tab = "zones";
   S.zoneStats = [
@@ -250,6 +296,33 @@ expect("zones", "22 racks × 5 levels · 99 of 110 locations in use");
 expect("zones", "Staging areas");
 expect("staff", "Ali Nasser");
 expect("staff", "Turned off");
+expect("money", "$39,344.95");
+expect("money", "3,521,373,025 LL");   /* 39,344.95 × 89,500 */
+expect("money", "680,283,235 LL");     /* collected, same rate */
+expect("money", "Not priced yet");
+expect("money", "User_EXMPL");
+expect("money", "oldest held 98 days");
+expect("money", "Take payment");
+expect("money", "Settled");
+expect("money", "$16.50 / kg");
+expect("money", "$450.00 / cbm");
+expect("money", "not set");
+expect("money-paged", "101–102 of 501");
+expect("payment-dialog", "across 1,185 parcels");
+expect("payment-dialog", "Mark $22,579.10 paid");
+
+/* The tabs themselves must not offer a scanner the money. */
+const tabs = n => ((out[n] || {}).text || "");
+if (/Money/.test(tabs("tabs-scanner"))) {
+  fail++; console.log("  FAIL  a scanner is offered Money: " + tabs("tabs-scanner"));
+} else pass++;
+for (const who of ["tabs-office", "tabs-admin"]) {
+  if (!/Money/.test(tabs(who))) { fail++; console.log("  FAIL  " + who + " has no Money tab"); }
+  else pass++;
+}
+if (/Staff/.test(tabs("tabs-office"))) {
+  fail++; console.log("  FAIL  office is offered Staff: " + tabs("tabs-office"));
+} else pass++;
 
 /* The money must not appear for a scanner, however the view is built: not in
    a row, and not in a tile either. */

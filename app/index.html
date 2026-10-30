@@ -224,6 +224,13 @@ select.inp{appearance:none;background-image:linear-gradient(45deg,transparent 49
 .zbar.stg i{background:var(--st-received)}
 .zbar.hot i{background:var(--danger)}
 
+/* ---------- rates ---------- */
+.lanes{display:flex;flex-direction:column;gap:1px;background:var(--line);border-radius:var(--r-sm);overflow:hidden;margin:8px 0 10px}
+.lane{display:flex;align-items:baseline;gap:10px;background:var(--surface);padding:8px 11px;flex-wrap:wrap}
+.ln{font-weight:600;font-size:13.5px}
+.lm{font-size:11.5px;color:var(--fg-faint)}
+.lp{margin-left:auto;font-weight:600;font-size:13.5px}
+
 /* ---------- toasts ---------- */
 .toasts{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(18px + env(safe-area-inset-bottom,0px));z-index:90;display:flex;flex-direction:column;gap:8px;width:min(440px,calc(100vw - 32px))}
 .toast{
@@ -296,6 +303,16 @@ const S = {
   total: 0,
   stats: null,         /* the tiles, counted by the database */
   zoneStats: null,
+
+  /* money — office and admin only */
+  money: null,
+  cfg: null,           /* rates and lane prices, readable only with the money */
+  customers: null,
+  custSearch: "",
+  custOwing: true,
+  custPage: 0,
+  custPageSize: 50,
+  custTotal: 0,
 
   /* scan station */
   zones: [],
@@ -474,6 +491,11 @@ function shell(view) {
       /* Load on arrival, so a tab is never opened onto stale counts. */
       if (t.id === "stock") { if (!S.stats) loadStats(); if (!S.rows) loadStock(); }
       if (t.id === "zones" && !S.zoneStats) loadZoneStats();
+      if (t.id === "money") {
+        if (!S.money) loadMoney();
+        if (!S.cfg) loadCfg();
+        if (!S.customers) loadCustomers();
+      }
     };
     tabs.append(b);
   }
@@ -491,6 +513,9 @@ function visibleTabs() {
     { id: "stock", label: "Stock" },
     { id: "zones", label: "Zones" },
   ];
+  /* A scanner is not shown Money, and would get nothing from it anyway: every
+     function behind it refuses them. */
+  if (sees_money()) t.push({ id: "money", label: "Money" });
   if (isAdmin()) t.push({ id: "staff", label: "Staff" });
   return t;
 }
@@ -1212,6 +1237,311 @@ async function loadZoneStats() {
   render();
 }
 
+/* ----------------------------------------------------------------- money --- */
+/* Office and admin only, and not merely hidden from a scanner: every function
+   behind this screen refuses anyone else outright, so the figures do not exist
+   for them to read. The totals and the grouping are the database's work —
+   adding up eight thousand charges in a browser would be both slow and a
+   second place for the arithmetic to go wrong. */
+
+const lbp = n => S.money
+  ? nf0.format(Math.round((Number(n) || 0) * (Number(S.money.lbp_rate) || 0))) + " LL"
+  : "";
+
+function vMoney() {
+  const v = el("section");
+  const head = el("div", "vhead");
+  const h = el("div");
+  h.append(el("h2", null, "Money"));
+  h.append(el("div", "sub", "What each customer owes on goods at the hub. " +
+    "Taking a payment marks their parcels paid and records who took it."));
+  head.append(h);
+  v.append(head);
+
+  const m = S.money;
+  if (!m) {
+    const e = el("div", "empty");
+    e.append(el("span", "spin"));
+    e.append(el("div", null, "Adding up…"));
+    v.append(e);
+    return v;
+  }
+
+  const tiles = el("div", "tiles");
+  const tile = (k, val, note, colour) => {
+    const d = el("div", "tile");
+    d.append(el("div", "k", k));
+    const b = el("div", "v", val);
+    if (colour) b.style.color = colour;
+    d.append(b);
+    if (note) d.append(el("div", "n", note));
+    return d;
+  };
+  tiles.append(
+    tile("Outstanding", money(m.owed), lbp(m.owed), "var(--danger)"),
+    tile("Collected", money(m.collected), lbp(m.collected), "var(--ok)"),
+    tile("Unpaid parcels", nf0.format(m.unpaid_count),
+      "across " + nf0.format(m.customers) + " customer" + (Number(m.customers) === 1 ? "" : "s")),
+    tile("Billed", money(m.billed), nf0.format(m.billed_count) + " parcels at the hub"),
+  );
+  /* Not a rounding difference — parcels nobody has put a price on, which is
+     money the warehouse has not asked for yet. */
+  if (Number(m.unpriced_count) > 0) {
+    const t = tile("Not priced yet", nf0.format(m.unpriced_count),
+      "across " + nf0.format(m.unpriced_customers) + " customer" +
+      (Number(m.unpriced_customers) === 1 ? "" : "s") + " — no charge set", "var(--warn)");
+    tiles.append(t);
+  }
+  v.append(tiles);
+
+  v.append(moneyFilters());
+
+  if (!S.customers) {
+    const e = el("div", "empty");
+    e.append(el("span", "spin"));
+    e.append(el("div", null, "Loading customers…"));
+    v.append(e);
+    return v;
+  }
+  if (!S.customers.length) {
+    const e = el("div", "empty");
+    e.append(el("b", null, S.custOwing ? "Nobody owes anything" : "No customers"));
+    e.append(document.createTextNode(S.custSearch
+      ? "Nothing matches that search."
+      : "Charges appear once parcels arrive and are given a price."));
+    v.append(e);
+    return v;
+  }
+
+  const list = el("div", "list");
+  for (const c of S.customers) list.append(customerRow(c));
+  v.append(list);
+  v.append(custPager());
+
+  const rates = ratesPanel();
+  if (rates) v.append(rates);
+  return v;
+}
+
+function moneyFilters() {
+  const bar = el("form", "row");
+  bar.style.marginBottom = "14px";
+  const q = el("input", "inp");
+  q.placeholder = "Customer, client number or phone…";
+  q.value = S.custSearch;
+  q.autocomplete = "off";
+  q.style.flex = "1 1 240px";
+  bar.append(q);
+
+  const t = el("button", "btn" + (S.custOwing ? " pri" : ""),
+    S.custOwing ? "Only those who owe" : "Everyone");
+  t.type = "button";
+  t.onclick = () => { S.custOwing = !S.custOwing; S.custPage = 0; loadCustomers(); };
+  bar.append(t);
+
+  const go = el("button", "btn pri", "Search");
+  go.type = "submit";
+  bar.append(go);
+  bar.addEventListener("submit", ev => {
+    ev.preventDefault();
+    S.custSearch = q.value; S.custPage = 0; loadCustomers();
+  });
+  return bar;
+}
+
+function customerRow(c) {
+  const li = el("div", "li");
+  const m = el("div", "li-m");
+  const nm = el("div", "li-nm");
+  nm.append(el("span", null, c.customer || "(no name)"));
+  nm.append(el("span", "chip", c.client_id));
+  m.append(nm);
+  const bits = [nf0.format(c.parcels) + " parcel" + (Number(c.parcels) === 1 ? "" : "s")];
+  if (Number(c.unpaid)) bits.push(nf0.format(c.unpaid) + " unpaid");
+  if (c.oldest_unpaid_days != null)
+    bits.push("oldest held " + nf0.format(c.oldest_unpaid_days) + " days");
+  if (c.phone) bits.push(c.phone);
+  m.append(el("div", "li-s", bits.join("  ·  ")));
+  li.append(m);
+
+  const a = el("div", "li-a");
+  const owed = Number(c.owed) || 0;
+  if (owed > 0) {
+    const o = el("span", "mono num", money(owed));
+    o.style.fontWeight = "700";
+    o.style.color = "var(--danger)";
+    a.append(o);
+    a.append(el("span", "li-s", lbp(owed)));
+    const b = el("button", "btn sm pri", "Take payment");
+    b.onclick = () => askPayment(c);
+    a.append(b);
+  } else {
+    a.append(el("span", "chip s-delivered", "Settled"));
+    a.append(el("span", "mono num li-s", money(c.total)));
+  }
+  const sh = el("button", "btn sm", "Parcels");
+  sh.onclick = () => {
+    S.q = c.client_id;
+    S.filters = { status: "", zone: "", paid: "" };
+    S.page = 0; S.tab = "stock";
+    loadStock();
+  };
+  a.append(sh);
+  li.append(a);
+  return li;
+}
+
+function custPager() {
+  const from = S.custPage * S.custPageSize;
+  const to = from + S.customers.length;
+  const w = el("div", "row");
+  w.style.marginTop = "12px";
+  w.append(el("span", "li-s", nf0.format(from + 1) + "–" + nf0.format(to) +
+    " of " + nf0.format(S.custTotal)));
+  const prev = el("button", "btn sm", "Back");
+  prev.disabled = S.custPage === 0;
+  prev.onclick = () => { S.custPage--; loadCustomers(); };
+  const next = el("button", "btn sm", "Next");
+  next.disabled = to >= S.custTotal;
+  next.onclick = () => { S.custPage++; loadCustomers(); };
+  const sp = el("span");
+  sp.style.marginLeft = "auto";
+  w.append(sp, prev, next);
+  return w;
+}
+
+/* The prices the charges are built from. Read-only here — changing them is a
+   rates job, and changing a rate does not re-price anything already charged. */
+function ratesPanel() {
+  const lanes = (S.cfg && Array.isArray(S.cfg.lanes)) ? S.cfg.lanes : null;
+  if (!lanes || !lanes.length) return null;
+  const card = el("div", "card pad");
+  card.style.marginTop = "18px";
+  const hr = el("div", "hr-t");
+  hr.append(el("span", "sect-t", "Rates in use"));
+  card.append(hr);
+  const g = el("div", "lanes");
+  for (const L of lanes) {
+    const r = el("div", "lane");
+    r.append(el("span", "ln", L.label || L.match));
+    r.append(el("span", "lm mono", L.match));
+    const p = Number(L.price) || 0;
+    const pv = el("span", "lp mono num",
+      p ? money(p) + " / " + (L.basis === "cbm" ? "cbm" : "kg") : "not set");
+    if (!p) pv.style.color = "var(--fg-faint)";
+    r.append(pv);
+    g.append(r);
+  }
+  card.append(g);
+  card.append(el("div", "sub2", "1 USD = " + nf0.format(Number(S.money.lbp_rate) || 0) +
+    " LL. A charge is worked out when a parcel is priced, so changing a rate " +
+    "here does not move a charge already made."));
+  return card;
+}
+
+function askPayment(c) {
+  const owed = Number(c.owed) || 0;
+  const scrim = el("div", "scrim");
+  const m = el("form", "modal");
+  m.append(el("h3", null, "Payment from " + (c.customer || c.client_id)));
+  const sub = el("p", "sub",
+    money(owed) + " (" + lbp(owed) + ") across " + nf0.format(c.unpaid) +
+    " parcel" + (Number(c.unpaid) === 1 ? "" : "s") + ".");
+  sub.style.margin = "4px 0 16px";
+  m.append(sub);
+
+  const err = el("div");
+  m.append(err);
+
+  const f = el("label", "field");
+  f.append(el("span", null, "How did they pay?"));
+  const sel = el("select", "inp");
+  for (const opt of ["CASH", "Cash on delivery paid", "WhishPay", "MontyPay",
+                     "Balance Pay", "Cybersource"]) {
+    const o = el("option", null, opt);
+    o.value = opt;
+    sel.append(o);
+  }
+  f.append(sel);
+  m.append(f);
+
+  m.append(banner(null, "This marks every unpaid parcel of theirs as paid",
+    "Each one gets a line in its history with your name and the time."));
+
+  const acts = el("div", "row");
+  const go = el("button", "btn pri", "Mark " + money(owed) + " paid");
+  go.type = "submit";
+  const no = el("button", "btn", "Cancel");
+  no.type = "button";
+  no.onclick = () => scrim.remove();
+  acts.append(go, no);
+  m.append(acts);
+
+  m.addEventListener("submit", async ev => {
+    ev.preventDefault();
+    go.disabled = true; no.disabled = true;
+    go.textContent = "";
+    go.append(el("span", "spin"), document.createTextNode(" Recording"));
+    const { data, error } = await S.sb.rpc("take_payment", {
+      p_client_id: c.client_id, p_method: sel.value,
+    });
+    if (error) {
+      err.replaceChildren(banner("bad", "Could not record it", error.message));
+      go.disabled = false; no.disabled = false;
+      go.textContent = "Mark " + money(owed) + " paid";
+      return;
+    }
+    const r = (data && data[0]) || {};
+    scrim.remove();
+    toast(nf0.format(r.marked || 0) + " parcel" + (Number(r.marked) === 1 ? "" : "s") +
+      " marked paid · " + money(r.amount || 0), "ok");
+    /* Everything downstream of a payment is now stale. */
+    S.rows = null; S.stats = null;
+    loadMoney(); loadCustomers();
+  });
+
+  scrim.append(m);
+  scrim.addEventListener("click", e => { if (e.target === scrim) scrim.remove(); });
+  document.body.append(scrim);
+}
+
+async function loadMoney() {
+  const { data, error } = await S.sb.rpc("money_summary");
+  if (error) { toast("Could not add up the money — " + error.message, "bad"); return; }
+  S.money = (data && data[0]) || null;
+  render();
+}
+
+async function loadCustomers() {
+  S.customers = null; render();
+  const { data, error } = await S.sb.rpc("customer_balances", {
+    p_only_owing: !!S.custOwing,
+    p_search: S.custSearch.trim() || null,
+    p_limit: S.custPageSize,
+    p_offset: S.custPage * S.custPageSize,
+  });
+  if (error) {
+    toast("Could not load the customers — " + error.message, "bad");
+    S.customers = []; render(); return;
+  }
+  S.customers = data || [];
+  S.custTotal = S.customers.length ? Number(S.customers[0].total_rows) || 0 : 0;
+  if (!S.customers.length && S.custTotal > 0 && S.custPage > 0) {
+    S.custPage = 0;
+    return loadCustomers();
+  }
+  render();
+}
+
+/* The lane prices live in settings, which only office and admin may read. */
+async function loadCfg() {
+  if (!sees_money()) return;
+  const { data, error } = await S.sb.from("settings").select("data").eq("id", 1).maybeSingle();
+  if (error) return;
+  S.cfg = (data && data.data) || null;
+  render();
+}
+
 /* ----------------------------------------------------------------- staff --- */
 function vStaff() {
   const v = el("section");
@@ -1462,6 +1792,7 @@ function render() {
   if (!S.session) { app.replaceChildren(vSignIn()); return; }
   if (!S.me) { app.replaceChildren(vNoAccess()); return; }
   const view = S.tab === "staff" && isAdmin() ? vStaff()
+             : S.tab === "money" && sees_money() ? vMoney()
              : S.tab === "stock" ? vStock()
              : S.tab === "zones" ? vZones()
              : vScan();
@@ -1499,6 +1830,8 @@ async function boot() {
       S.zones = []; S.scanFeed = []; S.undo = null; S.dest = { zone: "", shelf: "" };
       S.stats = null; S.zoneStats = null; S.page = 0; S.q = "";
       S.filters = { status: "", zone: "", paid: "" };
+      S.money = null; S.cfg = null; S.customers = null;
+      S.custSearch = ""; S.custPage = 0; S.custTotal = 0;
       if (S.session) await loadMe();
       render();
       if (S.me) { loadZones(); loadStats(); }
