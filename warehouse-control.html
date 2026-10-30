@@ -478,6 +478,10 @@ const DEFAULTS = {
 };
 const FEED_MAX = 200, HIST_MAX = 25, SCANFEED_MAX = 14;
 
+/* Bumped on every publish. Shown in Setup → Where this data lives, so a stale
+   installed app window can be told from a current one without guessing. */
+const BUILD = "2026-10-30.31";
+
 /* ============================== state ============================== */
 
 const S = {
@@ -778,12 +782,21 @@ function matchesFilters(it, skip){
     if(f.paid === "late" && !isLate(it)) return false;
     if(f.paid === "long" && !isLongStay(it)) return false;
   }
-  if(q){
-    const hay = [it.barcode,it.name,it.itemId,it.parcel,it.customer,it.clientId,it.phone,
-                 it.shelf,it.zone,it.origin,it.route,it.notes].join(" ").toLowerCase();
-    if(!hay.includes(q)) return false;
-  }
+  if(q && !haystack(it).includes(q)) return false;
   return true;
+}
+
+/* Everything a find is matched against: every field someone might type, the
+   four ids among them. One definition, so a search and a count of what a
+   search would reach can never drift apart. */
+const haystack = it =>
+  [it.barcode,it.name,it.itemId,it.parcel,it.customer,it.clientId,it.phone,
+   it.shelf,it.zone,it.origin,it.route,it.notes].join(" ").toLowerCase();
+
+/* What the text alone reaches, with every chip and drill-in ignored. */
+function queryHits(text){
+  const t = String(text||"").trim().toLowerCase();
+  return t ? allItems().filter(it => haystack(it).includes(t)) : [];
 }
 
 /* every item the current filters allow, ignoring one facet */
@@ -1372,7 +1385,29 @@ function vStock(v){
               : "Reading records from the shared database."));
     return;
   }
-  if(!rows.length){ v.append(emptyState("filter","Nothing matches these filters","Clear a filter or change the search above.")); return; }
+  /* A search that found parcels but drew a blank because a chip or a drill-in was
+     still on is the one dead end worth spelling out: "nothing matches" over a
+     parcel that is plainly in stock reads as the search being broken, and the
+     filter doing the hiding is a tile up the page that was clicked minutes ago.
+     So name the slice that missed, count what the text reaches without it, and
+     offer the whole warehouse in one press. */
+  if(!rows.length){
+    const q = f.q.trim(), wider = queryHits(q);
+    if(q && wider.length){
+      v.append(emptyState("filter",
+        "No match in " + filterLabel(true),
+        "“" + q + "” does match " + nf0.format(wider.length) + " item" +
+        (wider.length===1 ? "" : "s") + " in the warehouse. The filters above are hiding them.",
+        { label:"Search the whole warehouse",
+          fn:() => { S.filters = { status:"", zone:"", paid:"", q, parcel:"" }; render(); } }));
+    } else if(q){
+      v.append(emptyState("filter", "Nothing matches “" + q + "”",
+        "No parcel number, item or client id, shipment code, client, phone or shelf contains that."));
+    } else {
+      v.append(emptyState("filter","Nothing matches these filters","Clear a filter to see more."));
+    }
+    return;
+  }
 
   v.append(moneyStrip(rows));
 
@@ -1391,8 +1426,10 @@ function vStock(v){
   }
 }
 
-/* says in words which slice the figures above describe */
-function filterLabel(){
+/* Says in words which slice the figures above describe. `noQuery` names the
+   slice without the search text, for telling someone their search missed this
+   slice rather than the warehouse. */
+function filterLabel(noQuery){
   const f = S.filters, bits = [];
   if(f.status) bits.push(STATUS[f.status] ? STATUS[f.status].label : f.status);
   if(f.zone)   bits.push("zone " + f.zone);
@@ -1401,7 +1438,7 @@ function filterLabel(){
   if(f.paid === "late") bits.push("over free days");
   if(f.paid === "long") bits.push("here over " + (Number(S.cfg.longStayDays)||90) + " days");
   if(f.parcel) bits.push("shipment " + f.parcel);
-  if(f.q.trim()) bits.push("matching “" + f.q.trim() + "”");
+  if(!noQuery && f.q.trim()) bits.push("matching “" + f.q.trim() + "”");
   return bits.length ? bits.join(" · ") : "the whole warehouse";
 }
 
@@ -2269,7 +2306,13 @@ function vSetup(v){
     "Anyone you share the link with at Contributor level or above can scan and edit. Viewers can look but not change.",
     "This system is separate from your company dashboard. Use Import below to bring a list across; nothing syncs by itself.",
   ].forEach(t => { const d=el("div"); d.textContent = "· " + t; ul.append(d); });
-  ac.append(ul); v.append(ac);
+  /* An installed app window keeps its own cache, so it can be running an older
+     copy of this page than the same account sees in a browser tab — which looks
+     exactly like a feature not working rather than a page not having updated.
+     This line settles it: read it in both, and if they differ the app is stale. */
+  const bs = el("div"); bs.style.cssText="margin-top:11px;font-size:12px;color:var(--fg-faint)";
+  bs.append(el("span",null,"App version "), el("span","mono",BUILD));
+  ac.append(ul, bs); v.append(ac);
 }
 
 /* Pricing from the lane rates. Unlike the ￥ rebuild this can reach parcels
@@ -3125,11 +3168,16 @@ const ICONS = {
   clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/>',
   filter:'<path d="M3 5h18l-7 8v6l-4-2v-4L3 5Z"/>',
 };
-function emptyState(icon, title, text){
+function emptyState(icon, title, text, action){
   const d = el("div","empty");
   const ic = el("div","eic");
   ic.innerHTML = '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'+(ICONS[icon]||ICONS.box)+'</svg>';
   d.append(ic, el("h3",null,title), el("p",null,text));
+  if(action){
+    const b = el("button","btn pri",action.label); b.type="button";
+    b.addEventListener("click", action.fn);
+    d.append(b);
+  }
   return d;
 }
 
