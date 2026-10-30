@@ -514,6 +514,19 @@ function fmtTime(ms){
          d.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
 }
 function fmtDate(ms){ return ms ? new Date(ms).toLocaleDateString([], {day:"2-digit",month:"short",year:"2-digit"}) : "—"; }
+
+/* The dashboard writes "2026-10-22 15:00:16". Parsed as local time, because
+   that is the warehouse's own clock and nothing says otherwise; a value that
+   is not a date, or lands in the future, is treated as absent. */
+function parseStamp(s){
+  const t = String(s || "").trim();
+  if(!t) return 0;
+  const m = t.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/);
+  if(!m) return 0;
+  const ms = new Date(+m[1], +m[2]-1, +m[3], +(m[4]||0), +(m[5]||0), +(m[6]||0)).getTime();
+  if(!isFinite(ms) || +m[1] < 2000) return 0;
+  return ms > now() + 86400000 ? 0 : ms;
+}
 function daysSince(ms){ return ms ? Math.floor((now()-ms)/86400000) : null; }
 
 /* A shipment code carries the date it was raised: SH20260804234046 was raised
@@ -531,11 +544,22 @@ function shipDate(parcel){
 }
 
 /* How long a parcel has been with us, in days, or null when nothing says.
-   The shipment date wins where there is one; a parcel added here by scanning
-   has no shipment code yet and its own receivedAt is the honest answer. */
+   Best first: the date it actually left China, then the date its shipment code
+   was raised (about two days earlier), then — for a parcel added here by
+   scanning, which has neither — when it was recorded, the honest answer.
+   None of these is a Lebanon arrival date; the dashboard does not export one. */
 function ageDays(it){
-  const t = shipDate(it && it.parcel) || Number(it && it.receivedAt) || 0;
+  const t = Number(it && it.shippedAt) || shipDate(it && it.parcel)
+            || Number(it && it.receivedAt) || 0;
   return t ? Math.floor((now() - t) / 86400000) : null;
+}
+/* which of those a parcel's age actually came from, so the record can say so */
+function ageBasis(it){
+  if(Number(it && it.shippedAt)) return { label:"shipped from China", t:+it.shippedAt };
+  const sd = shipDate(it && it.parcel);
+  if(sd) return { label:"the shipment code", t:sd };
+  if(Number(it && it.receivedAt)) return { label:"when it was recorded here", t:+it.receivedAt };
+  return null;
 }
 const ageLabel = it => { const d = ageDays(it); return d == null ? "unknown" : nf0.format(d) + " days"; };
 
@@ -611,6 +635,8 @@ function blankItem(barcode){
     notes:"", demo:false,
     createdAt:now(), updatedAt:now(),
     receivedAt:0, shelvedAt:0, releasedAt:0, deliveredAt:0,
+    // the dashboard's own dates: left China, and into the China warehouse
+    shippedAt:0, inboundAt:0,
     updatedBy:S.meId||"", hist:[],
   };
 }
@@ -2394,6 +2420,8 @@ const ALIAS = {
   shelf:["shelf","location","loc","bin","rack","position",
          "package location","packagelocation"],
   paidAtRaw:["paid at","paidat","paidtime","付款时间"],
+  shippedAtRaw:["shipped at","shippedat","shipped","发货时间","出库时间"],
+  inboundAtRaw:["package inbound time","inbound time","inboundtime","入库时间"],
   payMethod:["payment method","paymentmethod","payment","paymentstatus","paid","ispaid","settled"],
   notes:["notes","note","remark","remarks","comment","comments",
          "warehouse remark","warehouseremark","备注"],
@@ -2683,6 +2711,12 @@ async function runImport(headers, data){
     if(cell("cost")) b.cost = num(cell("cost"));
 
     // Paid: a real "paid at" date means settled; cash on delivery means not yet.
+    // the dashboard's own dates, kept as they are: neither is a Lebanon arrival
+    const shippedAt = parseStamp(cell("shippedAtRaw"));
+    if(shippedAt) b.shippedAt = shippedAt;
+    const inboundAt = parseStamp(cell("inboundAtRaw"));
+    if(inboundAt) b.inboundAt = inboundAt;
+
     const paidAt = cell("paidAtRaw"), pm = cell("payMethod");
     if(pm) b.payMethod = pm;
     if(m.paidAtRaw != null) b.paid = !!paidAt;
@@ -2752,10 +2786,11 @@ function csvCell(v){
 function itemsToCsv(items){
   const cols = ["barcode","name","itemId","clientId","parcel","customer","phone","status","zone","shelf",
                 "qty","weightKg","cbm","dims","cny","cost","currency","paid","payMethod","origin","route",
-                "receivedAt","shelvedAt","deliveredAt","daysHeld","notes"];
+                "inboundAt","shippedAt","receivedAt","shelvedAt","deliveredAt","daysHeld","notes"];
   const head = ["Barcode","Item name","Item ID","Client ID","Shipment","Client","Phone","Status","Zone","Shelf",
                 "Quantity","Weight kg","CBM","Box size","Amount CNY","Charge USD","Currency","Paid","Payment method",
-                "Shipped from","Route","Received","Shelved","Delivered","Days held","Notes"];
+                "Shipped from","Route","Into China warehouse","Shipped from China",
+                "Received","Shelved","Delivered","Days held","Notes"];
   const lines = [head.map(csvCell).join(",")];
   for(const it of items){
     lines.push(cols.map(c => {
@@ -2856,13 +2891,22 @@ function openDrawer(id){
   if(it.shelvedAt)   kv("Shelved", fmtDate(it.shelvedAt));
   if(it.releasedAt)  kv("Released", fmtDate(it.releasedAt));
   if(it.deliveredAt) kv("Delivered", fmtDate(it.deliveredAt));
+  // the dashboard's own dates. Neither is an arrival in Lebanon; it exports none.
+  if(it.inboundAt) kv("Into China warehouse", fmtDate(it.inboundAt));
+  if(it.shippedAt){
+    const days = Math.floor((now() - it.shippedAt) / 86400000);
+    kv("Shipped from China", fmtDate(it.shippedAt) +
+      (it.inboundAt ? "  ·  " + Math.round((it.shippedAt - it.inboundAt)/86400000) +
+        " days after it arrived there" : "") +
+      (it.status === "expected" ? "  ·  " + nf0.format(days) + " days ago" : ""));
+  }
   const held = ageDays(it);
   if(held != null && it.status !== "expected"){
-    const sd = shipDate(it.parcel);
+    const basis = ageBasis(it);
     kv("Days held", nf0.format(held) +
       (isLongStay(it) ? "  (here too long)" : isLate(it) ? "  (over free days)" : "") +
-      // say where the number came from, since the two sources mean different things
-      (sd ? "  · from the shipment date, " + fmtDate(sd) : "  · since it was recorded here"));
+      // say where the number came from, since the sources mean different things
+      (basis ? "  ·  counted from " + basis.label + ", " + fmtDate(basis.t) : ""));
   }
   if(it.notes) kv("Notes", it.notes);
   body.append(dl);
