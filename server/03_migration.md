@@ -108,12 +108,25 @@ drop function if exists bootstrap_first_admin();
 It is inert after the first profile exists, but a trigger with an email address
 baked into it is not something to leave lying around in a year's time.
 
-## Still to do
+## Where the app lives
 
-Nothing is hosted. The app runs from `app/` on a local server; the staff need
-a URL before any of them can install it.
+**https://hadibaghdadi2005-svg.github.io/chinahub-warehouse-app/**
 
-**Not Supabase Storage.** This was tried on 30 October and does not work.
+GitHub Pages, from a second repository that is public because Pages requires
+it. It holds the page and its icons and nothing else — checked for customer
+data, phone numbers, barcodes and email addresses before it was pushed. The
+working repository stays private.
+
+That repository is generated, not edited. `node app/publish-pages.js "why"`
+clones it, copies the seven runtime files over and pushes if anything actually
+changed. Editing it by hand would be silently undone on the next run.
+
+Confirmed on the live URL: served as `text/html`, HTTPS, service worker
+active and scoped to the app's own path, manifest valid with three icons, and
+the whole shell cached — so it installs on a PC or a PDA and opens when the
+warehouse wifi does not.
+
+**Not Supabase Storage.** This was tried first, on 30 October, and does not work.
 Storage serves uploaded HTML as `text/plain` no matter what content type it
 was uploaded with — Supabase does this on purpose, so that nobody can host a
 convincing page on a `supabase.co` URL. The manifest, the service worker and
