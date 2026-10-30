@@ -31,3 +31,7 @@ desktop.ini
 *.log
 *.tmp
 .claude/
+
+# staged load SQL — holds the same customer data the CSVs do
+server/load/
+server/data/

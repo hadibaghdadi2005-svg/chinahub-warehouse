@@ -159,3 +159,16 @@ grant select on parcels_view to authenticated;
 -- not raise on a write it disallows, it narrows the rows to none. A test that
 -- treats "no exception" as "allowed" will report false failures — mine did,
 -- twice, until the rows themselves were checked.
+
+-- ------------------------------------------------------- one linter warning ----
+-- Supabase's security advisor flags `public.my_role()` as a SECURITY DEFINER
+-- function that signed-in users can call over the REST API. That is deliberate
+-- and safe: the function reads `profiles where id = auth.uid()`, so all anyone
+-- can learn by calling it is their own role, which the app shows them anyway.
+--
+-- It cannot simply be revoked. Every policy above calls it, and policies run
+-- with the caller's own privileges, so taking EXECUTE away from `authenticated`
+-- would lock all staff out of their own records. Moving it to an unexposed
+-- schema would mean dropping and recreating every policy that references it —
+-- that is, re-doing the part of this file that has been tested — for no gain
+-- beyond removing an endpoint that reveals nothing.
