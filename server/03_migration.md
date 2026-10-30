@@ -80,10 +80,35 @@ from the empty-table tests. Read with no profile, `parcels_view` returns all
 `cost`, `cny`, `declared`, `paid_at` and `pay_method` — while the table behind
 it holds all 8,232 charges.
 
+## The first admin
+
+Everything turns on `my_role()`, and an empty `profiles` gives everyone no
+role — so until there is one admin, **nobody can read anything through the
+app**. That is the correct closed state, not a fault.
+
+The account itself has to be made in the Supabase dashboard, by hand, because
+the password should be chosen by the person it belongs to and nobody else:
+
+> Authentication → Users → Add user → `hadibaghdadi11@gmail.com`, a password
+> of his own, **Auto Confirm User** switched on.
+
+The profile attaches itself. `bootstrap_first_admin_tr` on `auth.users` is a
+one-shot trigger that gives that one address an admin profile — but only while
+`profiles` is completely empty, so the moment it fires it can never fire again,
+and a stranger signing up first gets nothing. Checked both ways round before
+it was armed, with the test rolled back.
+
+**Drop it once he has signed in:**
+
+```sql
+drop trigger if exists bootstrap_first_admin_tr on auth.users;
+drop function if exists bootstrap_first_admin();
+```
+
+It is inert after the first profile exists, but a trigger with an email address
+baked into it is not something to leave lying around in a year's time.
+
 ## Still to do
 
-The first admin has to be created by hand once there is an auth user to attach
-it to, as `02_security.sql` describes at the end. Until then `profiles` is
-empty, which means **nobody can read anything through the app yet** — every
-policy turns on `my_role()`, and an empty `profiles` gives everyone no role.
-That is the correct closed state to be in before sign-in exists, not a fault.
+Nothing is hosted. The app runs from `app/` on a local server; the staff need
+a URL before any of them can install it.
