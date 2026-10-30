@@ -112,3 +112,14 @@ baked into it is not something to leave lying around in a year's time.
 
 Nothing is hosted. The app runs from `app/` on a local server; the staff need
 a URL before any of them can install it.
+
+**Not Supabase Storage.** This was tried on 30 October and does not work.
+Storage serves uploaded HTML as `text/plain` no matter what content type it
+was uploaded with — Supabase does this on purpose, so that nobody can host a
+convincing page on a `supabase.co` URL. The manifest, the service worker and
+the icons all came back with the right types; only the page itself is
+rewritten, and a browser shows it as source. There is no way round it from the
+upload side. The bucket and its files were removed again.
+
+Whatever hosts this needs to be a plain static host that serves `text/html`:
+GitHub Pages, Cloudflare Pages, Netlify and the like all do.
