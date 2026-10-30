@@ -1,7 +1,7 @@
 # ChinaHub warehouse control
 
-Tools for running the China → Lebanon consolidation warehouse: a stock and
-payments app, a barcode scanner for the PDA, and scripts that reconcile what is
+Tools for running the China → Lebanon consolidation warehouse: a staff app with
+sign-in, a barcode scanner for the PDA, and scripts that reconcile what is
 physically on the shelves against what the ChinaHub dashboard believes.
 
 Built because the dashboard tracks parcels but not **where they are**, and
@@ -9,19 +9,52 @@ because its Received list and the warehouse floor do not always agree.
 
 ---
 
+## The app
+
+**https://hadibaghdadi2005-svg.github.io/chinahub-warehouse-app/**
+
+Open it on a PC or a PDA and install it from the browser. It signs in against
+a Postgres database holding 8,232 parcels and their history, and what each
+person can see and do is decided there, not on screen.
+
+| Role | Can |
+|---|---|
+| scanner | Scan, shelve, look up. **Never sees a charge** — the money columns are revoked, not hidden. |
+| office | All of that, plus pricing, taking payment and bringing exports in. |
+| admin | All of that, plus staff accounts, rates and the floor plan. |
+
+Six tabs: **Scan** (five modes, shelf labels, range checks, sound, undo),
+**Stock** (tiles, filters, search, paging), **Zones**, **Money**, **Setup**
+(rates, lane prices, floor plan, import) and **Staff**.
+
+Accounts are made by an admin from inside the app; there is no public sign-up.
+
+---
+
 ## What is here
 
 | File | What it is |
 |---|---|
-| `warehouse-control.html` | The warehouse app. Published as a private Claude artifact; its data lives in that artifact's shared database, not in this file. |
-| `pda-scanner.html` | A standalone shelf scanner for the PDA. Opens from local storage, works offline, no network calls at all. |
+| `app/index.html` | The app. Published to GitHub Pages by `app/publish-pages.js`, which regenerates the public repo — never edit that copy by hand. |
+| `app/sw.js`, `manifest.webmanifest`, `icon-*.png` | What makes it installable and able to open with no network. Icons are drawn by `app/make-icons.js`. |
+| `app/serve.js` | A local server for trying the app before publishing. |
+| `app/test-render.js` | Builds every view headlessly. A view that throws reaches a PDA as a blank screen and nothing else catches it. |
+| `app/test-scan-logic.js` | The barcode and shelf-label rules, against the real zone layout. |
+| `app/test-import.js` | Runs the importer over a real dashboard export. |
+| `server/01_schema.sql` | Tables, indexes, the status constraint. |
+| `server/02_security.sql` | Who may see and do what. Read this before changing any of it. |
+| `server/03_migration.md` | How the records came out of the Claude artifact, and how that was checked. |
+| `server/functions/staff/` | Creating a sign-in needs the service key, so it happens here, not in the app. |
+| `warehouse-control.html` | The original Claude artifact. Still works; the app above replaces it. |
+| `pda-scanner.html` | A standalone offline shelf scanner. No network calls at all. |
 | `scripts/xlsx.js` | Reader for the dashboard's `.xlsx` exports. No dependencies. |
 | `scripts/scan.js` | Shared pieces: scan files, the rack layout, shelf-label checks, document ids. |
 | `scripts/reconcile.js` | Compares a floor scan against an export and writes the discrepancy lists. |
 | `scripts/long-stay.js` | Finds parcels that have been sitting too long, aged from the shipment code. |
 
 **No customer data is in this repository, deliberately.** See
-[Why the data is not here](#why-the-data-is-not-here).
+[Why the data is not here](#why-the-data-is-not-here). The public Pages repo
+holds the page and its icons only, and is checked before each publish.
 
 ---
 
@@ -104,15 +137,22 @@ You get four lists in `reports/`:
 
 ### 4. Import the locations
 
-In the app: **Setup → Import**, pick `reports/shelf-locations.csv`, set
-*These rows are* to **Already on shelves**, and leave the zone picker alone —
-each shelf code carries its own zone.
+In the app: **Setup → Bring a list in**, pick the file, and set *New parcels
+arrive as* for anything the warehouse has not seen before.
 
-Importing an export again is safe for parcels already stored: it refreshes
-names, phones, weights and charges but leaves status and shelf alone. The one
-exception is a `Package location` column — if ChinaHub ever starts filling it
-in, it will overwrite the locations you scanned. Check that column is empty
-before importing.
+Importing an export again is safe for parcels already stored. A value only
+overwrites when the export actually carries one, so a partial export cannot
+blank a weight or a phone number, and **status, zone and shelf are set on a new
+parcel only** — a parcel already on C22-01-05 keeps its shelf whatever the file
+says.
+
+The dashboard's `Package location` column is **never mapped by default**, and
+the app says why if you map it anyway: it is where the parcel sat in China, and
+it is what forced the floor re-scan in the first place.
+
+The preview also names any column that is mapped but **blank in every row** — a
+column can be ticked in the dashboard and exported empty, which looks exactly
+like a good import until someone needs the figure.
 
 ---
 
@@ -167,21 +207,28 @@ node scripts/long-stay.js --records <dir> --days 90 --out long-stay.csv
 `--records` is a directory of one-JSON-per-parcel records exported from the
 app's database.
 
-**Age cannot come from the app.** Every parcel's `receivedAt` is the moment the
-data was imported, not when the goods arrived, so it is the same value on
-thousands of records. The real date is inside the shipment code: `SH20260804…`
-was raised on 4 August 2026. Parcels whose code carries no date — new arrivals
-still identified by their order number — are reported separately rather than
-assumed to be new.
+**Age cannot come from `received_at`.** It is the moment the data was imported,
+not when the goods arrived, so it is the same value on thousands of records.
+The app counts from **when the parcel left China** (`shipped_at`, which the
+export does carry) and falls back to when it was first recorded here, and the
+parcel screen says which of the two it used. The older `long-stay.js` reads the
+date out of the shipment code instead: `SH20260804…` was raised on 4 August
+2026.
 
 Parcels already out for delivery or delivered are excluded.
 
 ## Charges
 
 Charges are stored in **USD**, converted from the ￥ amount in the export at a
-rate you set in the app (**Setup → ￥ per USD**, currently `6.1`). The original
-￥ figure is kept on every parcel, so changing the rate and running
-**Setup → Recalculate charges** rebuilds every USD figure from the yuan.
+rate set in **Setup → Yuan per 1 USD** (currently `6.1`). The original ￥ figure
+is kept on every parcel, so the conversion can always be re-checked.
+
+Freight is priced per lane, in **Setup → Price per lane**. A parcel is matched
+on what its route says and the most specific match wins, so `Air Cargo Hk`
+beats `Air Cargo` whatever order they are in. **Count what each lane takes**
+runs the match over every parcel so a mistyped lane is visible — on 30 October:
+Guangzhou 4,535, sea 2,208, Hong Kong 854, air-other 451, and 184 matching no
+lane at all. A lane priced 0 is ignored and the fallback rate is used.
 
 Note that the dashboard's chargeable column means CBM on sea routes and
 kilograms on air, so it cannot be read as a single unit. Volume is derived from
@@ -220,3 +267,26 @@ personal, which is a second reason to keep them out.
 - **The top shelves are nearly empty.** Of 1,737 parcels, level 01 held 107 and
   level 04 held 641. Expected, but worth knowing before reading a level count as
   a problem.
+- **Hiding a figure is not protecting it.** The money was masked in a view, and
+  `select cost from parcels` still handed a scanner all 8,232 charges. Row-level
+  security could not have caught it — it governs which *rows* you see, and a
+  scanner is entitled to every row. Columns have to be revoked. See
+  `server/02_security.sql`.
+- **A disallowed write does not fail, it changes nothing.** Postgres narrows it
+  to zero rows. Any check that treats "no error" as "it worked" will report
+  success for a write that never happened — read the rows back.
+
+---
+
+## Still on the warehouse floor
+
+Not software, and not done:
+
+- **1,854 shelf locations** in `shelf-worksheet.csv` never loaded.
+- **480 parcels** left China more than 90 days ago and are still in transit.
+- **1,884 parcels** with no location, 1,184 of them on account `1000001`.
+- **16 parcels** on the two shelf labels that would not read.
+- **4 + 7 picking misses** — shipped on paper, still on the shelf.
+- **18 parcels with no charge at all**, 17 of them on client `65`.
+- **Three mangled barcodes** that came in that way from ChinaHub and are real
+  parcels with real customers: `YT`, `test435453534`, `Test398329829`.
