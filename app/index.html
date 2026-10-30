@@ -231,6 +231,37 @@ select.inp{appearance:none;background-image:linear-gradient(45deg,transparent 49
 .lm{font-size:11.5px;color:var(--fg-faint)}
 .lp{margin-left:auto;font-weight:600;font-size:13.5px}
 
+/* ---------- parcel drawer ---------- */
+.li.click{cursor:pointer}
+.li.click:hover{background:var(--surface-2)}
+.drawer{
+  background:var(--surface);width:min(620px,100%);max-height:92dvh;
+  border-radius:var(--r-lg);box-shadow:var(--shadow-lg);
+  display:flex;flex-direction:column;overflow:hidden;
+}
+.dhead{display:flex;align-items:flex-start;gap:12px;padding:18px 20px 14px;border-bottom:1px solid var(--line)}
+.dt{min-width:0;flex:1}
+.dt b{display:block;font-size:16px;letter-spacing:.01em}
+.dt>span{display:block;font-size:13.5px;color:var(--fg-dim);margin-top:2px}
+.dbody{padding:16px 20px;overflow:auto;flex:1}
+.dfoot{display:flex;gap:8px;padding:13px 20px;border-top:1px solid var(--line);background:var(--surface-2);flex-wrap:wrap}
+.kv{display:grid;grid-template-columns:minmax(120px,38%) 1fr;gap:5px 14px;margin:0}
+.kv dt{font-size:12.5px;color:var(--fg-dim);font-weight:600}
+.kv dd{margin:0;font-size:13.5px;overflow-wrap:anywhere}
+.sep{border:0;border-top:1px solid var(--line);margin:16px 0 0}
+.hist{display:flex;flex-direction:column;gap:9px;margin-top:4px}
+.hi{display:flex;gap:11px;align-items:flex-start}
+.ht{font-size:11.5px;color:var(--fg-faint);font-family:var(--mono);white-space:nowrap;padding-top:2px;min-width:92px}
+.hb{min-width:0}
+.hb b{display:block;font-size:13px;font-weight:600}
+.hb span{font-size:12px;color:var(--fg-dim);overflow-wrap:anywhere}
+@media (max-width:560px){
+  .kv{grid-template-columns:1fr;gap:1px 0}
+  .kv dd{margin-bottom:7px}
+  .hi{flex-direction:column;gap:1px}
+  .ht{min-width:0}
+}
+
 /* ---------- lane table ---------- */
 .lanetbl{display:flex;flex-direction:column;gap:6px}
 .lanehd,.lanerow{display:grid;grid-template-columns:1.2fr 1.4fr .8fr .7fr .6fr auto;gap:7px;align-items:center}
@@ -328,6 +359,7 @@ const S = {
   /* setup */
   cfgDraft: null,      /* edits in progress; nothing is written until Save */
   cfgSaving: false,
+  drawer: null,        /* the parcel currently open over everything */
   laneCover: null,     /* how many parcels each lane would take */
   coverBusy: false,
 
@@ -353,6 +385,7 @@ const el = (t, c, x) => {
 const sees_money = () => S.me && (S.me.role === "office" || S.me.role === "admin");
 const isAdmin = () => S.me && S.me.role === "admin";
 const nf0 = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
+const nf3 = new Intl.NumberFormat("en-US", { maximumFractionDigits: 3 });
 const nf2 = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const money = n => "$" + nf2.format(Number(n) || 0);
 const fmtDate = s => s ? new Date(s).toLocaleDateString([], { day: "2-digit", month: "short", year: "2-digit" }) : "—";
@@ -892,7 +925,9 @@ function vScan() {
   } else {
     const list = el("div", "list");
     for (const f of S.scanFeed) {
-      const li = el("div", "li");
+      const li = el("div", "li click");
+      /* A scan line is the quickest way back to the parcel it was about. */
+      li.onclick = () => openParcel(f.bc);
       const m = el("div", "li-m");
       const nm = el("div", "li-nm");
       nm.append(el("span", "mono", f.bc));
@@ -1085,7 +1120,8 @@ function pager() {
 }
 
 function recordRow(r) {
-  const li = el("div", "li");
+  const li = el("div", "li click");
+  li.onclick = () => openParcel(r.barcode);
   const m = el("div", "li-m");
   const nm = el("div", "li-nm");
   nm.append(el("span", "mono", r.barcode));
@@ -1561,6 +1597,416 @@ async function loadCfg() {
   if (error) return;
   S.cfg = (data && data.data) || null;
   render();
+}
+
+/* ---------------------------------------------------------------- drawer --- */
+/* One parcel, everything known about it, and whatever the person looking at it
+   is allowed to do. The money lines simply are not there for a scanner — the
+   view hands back nulls — and the edit form offers each role exactly the
+   fields the database would accept from them, so nothing on screen is a
+   button that fails. */
+
+/* What a scanner may change, per the parcels_guard trigger. Everything else
+   on this list is money or the customer, and the database refuses it. */
+const SCANNER_FIELDS = ["name", "dims", "weight_kg", "cbm", "qty", "notes", "shipment"];
+const OFFICE_FIELDS = SCANNER_FIELDS.concat(
+  ["customer", "phone", "client_id", "cost", "cny", "declared", "pay_method"]);
+
+const FIELD_LABEL = {
+  name: "Description", dims: "Box size", weight_kg: "Weight (kg)",
+  cbm: "Volume (CBM)", qty: "Quantity", notes: "Notes", shipment: "Shipment",
+  customer: "Customer", phone: "Phone", client_id: "Client number",
+  cost: "Charge (USD)", cny: "Dashboard amount (￥)", declared: "Declared value",
+  pay_method: "Payment method",
+};
+const NUMERIC_FIELDS = new Set(["weight_kg", "cbm", "qty", "cost", "cny", "declared"]);
+
+async function openParcel(barcode) {
+  S.drawer = { barcode, loading: true, parcel: null, events: null, names: {} };
+  render();
+
+  const { data, error } = await S.sb.from("parcels_view").select("*")
+    .eq("barcode", barcode).maybeSingle();
+  if (error || !data) {
+    S.drawer = null;
+    toast(error ? error.message : "That parcel is no longer there", "bad");
+    render();
+    return;
+  }
+  S.drawer.parcel = data;
+  S.drawer.loading = false;
+  render();
+
+  /* History second: the parcel should be on screen while this arrives. */
+  const { data: ev } = await S.sb.from("parcel_events")
+    .select("id,at,actor,from_status,to_status,loc,note")
+    .eq("barcode", barcode).order("at", { ascending: false }).limit(60);
+  const events = ev || [];
+  const ids = [...new Set(events.map(e => e.actor).filter(Boolean))];
+  let names = {};
+  if (ids.length) {
+    const { data: ppl } = await S.sb.from("profiles").select("id,name").in("id", ids);
+    for (const p of (ppl || [])) names[p.id] = p.name;
+  }
+  if (S.drawer && S.drawer.barcode === barcode) {
+    S.drawer.events = events;
+    S.drawer.names = names;
+    render();
+  }
+}
+
+const closeParcel = () => { S.drawer = null; render(); };
+
+function vDrawer() {
+  const d = S.drawer;
+  if (!d) return null;
+  const scrim = el("div", "scrim");
+  scrim.addEventListener("click", e => { if (e.target === scrim) closeParcel(); });
+  const panel = el("aside", "drawer");
+  panel.setAttribute("role", "dialog");
+  panel.setAttribute("aria-modal", "true");
+
+  if (d.loading || !d.parcel) {
+    const e = el("div", "empty");
+    e.append(el("span", "spin"));
+    e.append(el("div", null, "Opening " + d.barcode + "…"));
+    panel.append(e);
+    scrim.append(panel);
+    return scrim;
+  }
+
+  const p = d.parcel;
+  const head = el("div", "dhead");
+  const dt = el("div", "dt");
+  dt.append(el("b", "mono", p.barcode));
+  dt.append(el("span", null, p.name || "No description recorded"));
+  const chips = el("div", "row");
+  chips.style.marginTop = "7px";
+  chips.append(el("span", "chip s-" + p.status, STATUS[p.status] || p.status));
+  if (p.paid != null)
+    chips.append(el("span", "chip " + (p.paid ? "s-delivered" : "off"), p.paid ? "Paid" : "Unpaid"));
+  const held = p.age_days;
+  const longD = (S.stats && S.stats.long_stay_days) || 90;
+  const freeD = (S.stats && S.stats.free_days) || 14;
+  const stillHere = p.status === "shelved" || p.status === "received";
+  if (stillHere && held != null) {
+    if (held >= longD) chips.append(el("span", "chip off", "here " + nf0.format(held) + " days"));
+    else if (held > freeD) chips.append(el("span", "chip s-received", "over " + freeD + " free days"));
+  }
+  dt.append(chips);
+  head.append(dt);
+  const x = el("button", "btn sm", "Close");
+  x.onclick = closeParcel;
+  head.append(x);
+  panel.append(head);
+
+  const body = el("div", "dbody");
+  const dl = el("dl", "kv");
+  const kv = (k, val) => {
+    if (val == null || val === "") return;
+    dl.append(el("dt", null, k));
+    dl.append(el("dd", null, String(val)));
+  };
+  kv("Shipment", p.shipment);
+  kv("Customer", p.customer);
+  kv("Client number", p.client_id);
+  kv("Phone", p.phone);
+  kv("Where", p.shelf || p.zone || "not placed");
+  kv("Shipped from", p.origin);
+  kv("Route", p.route);
+  if (Number(p.qty)) kv("Quantity", nf0.format(p.qty));
+  if (Number(p.weight_kg)) kv("Weight", nf3.format(p.weight_kg) + " kg");
+  if (Number(p.cbm)) kv("Volume", nf3.format(p.cbm) + " CBM");
+  kv("Box size", p.dims);
+
+  /* Money, only if the database sent it. */
+  if (p.cost != null) {
+    kv("Charge", Number(p.cost) ? money(p.cost) + "  ·  " + lbpAt(p.cost) : "not priced yet");
+    const lane = laneFor(p);
+    if (lane) {
+      const qty = lane.basis === "cbm" ? Number(p.cbm) || 0 : Number(p.weight_kg) || 0;
+      const unit = lane.basis === "cbm" ? "CBM" : "kg";
+      kv("Lane", (lane.label || lane.match) + "  ·  " + money(lane.price) + " per " + unit +
+        (qty ? "  ×  " + nf3.format(qty) + " " + unit + "  =  " + money(laneCost(p))
+             : "  (no " + unit + " recorded)"));
+    }
+    if (Number(p.cny)) kv("Dashboard amount", "￥" + nf2.format(p.cny));
+    if (Number(p.declared)) kv("Declared value", nf2.format(p.declared));
+    kv("Payment method", p.pay_method);
+    if (p.paid_at) kv("Paid", fmtDate(p.paid_at));
+  }
+
+  kv("Into the China warehouse", p.inbound_at && fmtDate(p.inbound_at));
+  if (p.shipped_at) {
+    let s = fmtDate(p.shipped_at);
+    if (p.inbound_at)
+      s += "  ·  " + nf0.format(Math.round(
+        (new Date(p.shipped_at) - new Date(p.inbound_at)) / 86400000)) + " days after arriving there";
+    kv("Left China", s);
+  }
+  kv("Received here", p.received_at && fmtDate(p.received_at));
+  kv("Shelved", p.shelved_at && fmtDate(p.shelved_at));
+  kv("Released", p.released_at && fmtDate(p.released_at));
+  kv("Delivered", p.delivered_at && fmtDate(p.delivered_at));
+  if (held != null && p.status !== "expected")
+    kv("Days held", nf0.format(held) + "  ·  counted from " +
+      (p.shipped_at ? "when it left China" : "when it was first recorded here"));
+  kv("Notes", p.notes);
+  body.append(dl);
+
+  /* ---- moving it ---- */
+  body.append(el("hr", "sep"));
+  const mh = el("div", "hr-t");
+  mh.append(el("span", "sect-t", "Move it"));
+  body.append(mh);
+  const mg = el("div", "row");
+  for (const s of ["expected", "received", "shelved", "released", "delivered"]) {
+    if (s === p.status) continue;
+    const b = el("button", "btn sm", "→ " + (STATUS[s] || s));
+    b.onclick = () => moveFromDrawer(p, s);
+    mg.append(b);
+  }
+  body.append(mg);
+  body.append(el("div", "sub2", "Moving to a shelf is better done on the Scan screen, " +
+    "where a shelf label sets where it goes."));
+
+  /* ---- payment ---- */
+  if (sees_money()) {
+    body.append(el("hr", "sep"));
+    const ph = el("div", "hr-t");
+    ph.append(el("span", "sect-t", "Payment"));
+    body.append(ph);
+    const pr = el("div", "row");
+    const pb = el("button", "btn sm" + (p.paid ? "" : " pri"),
+      p.paid ? "Mark unpaid" : "Mark paid" + (Number(p.cost) ? " · " + money(p.cost) : ""));
+    pb.onclick = () => togglePaid(p);
+    pr.append(pb);
+    body.append(pr);
+  }
+
+  /* ---- history ---- */
+  body.append(el("hr", "sep"));
+  const hh = el("div", "hr-t");
+  hh.append(el("span", "sect-t", "History"));
+  body.append(hh);
+  const hs = el("div", "hist");
+  if (!d.events) {
+    const w = el("div", "sub2");
+    w.append(el("span", "spin"));
+    w.append(document.createTextNode(" reading the history…"));
+    hs.append(w);
+  } else if (!d.events.length) {
+    hs.append(el("div", "sub2", "Nothing recorded yet."));
+  } else {
+    for (const e of d.events) {
+      const r = el("div", "hi");
+      r.append(el("div", "ht", fmtWhen(e.at)));
+      const b = el("div", "hb");
+      b.append(el("b", null, (e.from_status ? (STATUS[e.from_status] || e.from_status) + " → " : "Added as ") +
+        (STATUS[e.to_status] || e.to_status || "—")));
+      const bits = [];
+      /* A line written before there were accounts has no name to give, and
+         saying so is better than inventing one. */
+      bits.push(e.actor ? (d.names[e.actor] || "someone since removed") : "before sign-in");
+      if (e.loc) bits.push(e.loc);
+      if (e.note) bits.push(e.note);
+      b.append(el("span", null, bits.join("  ·  ")));
+      r.append(b);
+      hs.append(r);
+    }
+  }
+  body.append(hs);
+  panel.append(body);
+
+  const foot = el("div", "dfoot");
+  const ed = el("button", "btn pri", "Edit details");
+  ed.onclick = () => askEdit(p);
+  foot.append(ed);
+  if (isAdmin()) {
+    const del = el("button", "btn dng", "Delete");
+    del.onclick = () => askDeleteParcel(p);
+    foot.append(del);
+  }
+  const cl = el("button", "btn", "Close");
+  cl.style.marginLeft = "auto";
+  cl.onclick = closeParcel;
+  foot.append(cl);
+  panel.append(foot);
+
+  scrim.append(panel);
+  return scrim;
+}
+
+/* The lane that would price this parcel, by the same rule the warehouse uses:
+   longest match on route and origin wins, and a lane priced 0 is ignored. */
+function laneFor(p) {
+  const lanes = (S.cfg && Array.isArray(S.cfg.lanes)) ? S.cfg.lanes : [];
+  const hay = ((p.route || "") + " " + (p.origin || "")).toLowerCase();
+  let best = null;
+  for (const L of lanes) {
+    const m = String(L.match || "").trim().toLowerCase();
+    if (!m || !(Number(L.price) > 0)) continue;
+    if (!hay.includes(m)) continue;
+    if (!best || m.length > String(best.match).trim().length) best = L;
+  }
+  return best;
+}
+function laneCost(p) {
+  const L = laneFor(p);
+  if (!L) return null;
+  const qty = L.basis === "cbm" ? Number(p.cbm) || 0 : Number(p.weight_kg) || 0;
+  if (!qty) return null;
+  return +(qty * Number(L.price)).toFixed(2);
+}
+
+const lbpAt = n => S.cfg && Number(S.cfg.lbpRate)
+  ? nf0.format(Math.round((Number(n) || 0) * Number(S.cfg.lbpRate))) + " LL" : "";
+
+function fmtWhen(iso) {
+  if (!iso) return "—";
+  const t = new Date(iso);
+  return t.toLocaleDateString([], { day: "2-digit", month: "short" }) + " " +
+    t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+async function moveFromDrawer(p, to) {
+  const loc = (to === "released" || to === "delivered") ? { shelf: "" }
+            : to === "expected" ? { shelf: "", zone: "" } : null;
+  try {
+    await moveParcel(p, to, loc, "changed from the parcel screen");
+    toast("Moved to " + (STATUS[to] || to).toLowerCase(), "ok");
+    S.rows = null; S.stats = null; S.zoneStats = null;
+    openParcel(p.barcode);
+  } catch (e) {
+    toast((e && e.message) || "Could not move it", "bad");
+  }
+}
+
+async function togglePaid(p) {
+  const now = new Date().toISOString();
+  const want = !p.paid;
+  const { data, error } = await S.sb.from("parcels")
+    .update(want ? { paid: true, paid_at: now } : { paid: false, paid_at: null })
+    .eq("barcode", p.barcode).select("barcode");
+  if (error) { toast(error.message, "bad"); return; }
+  if (!data || !data.length) { toast("Nothing changed — the office handles payment.", "bad"); return; }
+  await S.sb.from("parcel_events").insert({
+    barcode: p.barcode, at: now, actor: S.me.id,
+    from_status: p.status, to_status: p.status, loc: null,
+    note: want ? "marked paid" : "marked unpaid",
+  });
+  toast(want ? "Marked paid" : "Marked unpaid", "ok");
+  S.money = null; S.customers = null; S.rows = null; S.stats = null;
+  openParcel(p.barcode);
+}
+
+function askEdit(p) {
+  const fields = sees_money() ? OFFICE_FIELDS : SCANNER_FIELDS;
+  const scrim = el("div", "scrim");
+  const m = el("form", "modal");
+  m.append(el("h3", null, "Edit " + p.barcode));
+  const sub = el("p", "sub", sees_money()
+    ? "Blank a field to clear it."
+    : "A scanner may correct what a parcel is, not who it is for or what it costs.");
+  sub.style.margin = "4px 0 16px";
+  m.append(sub);
+  const err = el("div");
+  m.append(err);
+
+  const inputs = {};
+  for (const k of fields) {
+    const w = el("label", "field");
+    w.append(el("span", null, FIELD_LABEL[k] || k));
+    const i = el("input", "inp");
+    i.value = p[k] == null ? "" : p[k];
+    if (NUMERIC_FIELDS.has(k)) { i.type = "number"; i.step = "any"; i.min = "0"; }
+    inputs[k] = i;
+    w.append(i);
+    m.append(w);
+  }
+
+  const acts = el("div", "row");
+  const go = el("button", "btn pri", "Save");
+  go.type = "submit";
+  const no = el("button", "btn", "Cancel");
+  no.type = "button";
+  no.onclick = () => scrim.remove();
+  acts.append(go, no);
+  m.append(acts);
+
+  m.addEventListener("submit", async ev => {
+    ev.preventDefault();
+    const patch = {};
+    for (const k of fields) {
+      const raw = inputs[k].value;
+      if (NUMERIC_FIELDS.has(k)) {
+        const n = raw === "" ? 0 : Number(raw);
+        if (!Number.isFinite(n) || n < 0) {
+          err.replaceChildren(banner("bad", "That is not a number",
+            (FIELD_LABEL[k] || k) + " needs a number, or nothing."));
+          return;
+        }
+        patch[k] = k === "qty" ? Math.round(n) : n;
+      } else {
+        patch[k] = raw.trim() === "" ? null : raw.trim();
+      }
+    }
+    go.disabled = true; no.disabled = true;
+    const { data, error } = await S.sb.from("parcels")
+      .update(patch).eq("barcode", p.barcode).select("barcode");
+    go.disabled = false; no.disabled = false;
+    if (error) {
+      err.replaceChildren(banner("bad", "Could not save", error.message));
+      return;
+    }
+    if (!data || !data.length) {
+      err.replaceChildren(banner("bad", "Nothing was saved",
+        "Your account may not change these."));
+      return;
+    }
+    await S.sb.from("parcel_events").insert({
+      barcode: p.barcode, at: new Date().toISOString(), actor: S.me.id,
+      from_status: p.status, to_status: p.status, loc: null, note: "details edited",
+    });
+    scrim.remove();
+    toast("Saved", "ok");
+    S.rows = null; S.stats = null; S.money = null;
+    openParcel(p.barcode);
+  });
+
+  scrim.append(m);
+  scrim.addEventListener("click", e => { if (e.target === scrim) scrim.remove(); });
+  document.body.append(scrim);
+}
+
+function askDeleteParcel(p) {
+  const scrim = el("div", "scrim");
+  const m = el("form", "modal");
+  m.append(el("h3", null, "Delete this record?"));
+  m.append(banner("bad", p.barcode + (p.name ? " — " + p.name : ""),
+    "The record and its whole history go for good. The parcel itself is not affected — " +
+    "if it is still on a shelf, nothing will know about it."));
+  const acts = el("div", "row");
+  const go = el("button", "btn dng", "Delete it");
+  go.type = "submit";
+  const no = el("button", "btn", "Keep it");
+  no.type = "button";
+  no.onclick = () => scrim.remove();
+  acts.append(no, go);
+  m.append(acts);
+  m.addEventListener("submit", async ev => {
+    ev.preventDefault();
+    go.disabled = true;
+    const { error } = await S.sb.from("parcels").delete().eq("barcode", p.barcode);
+    if (error) { toast(error.message, "bad"); go.disabled = false; return; }
+    scrim.remove();
+    closeParcel();
+    toast("Record deleted", "ok");
+    S.rows = null; S.stats = null; S.money = null; S.zoneStats = null;
+    loadStock();
+  });
+  scrim.append(m);
+  document.body.append(scrim);
 }
 
 /* ----------------------------------------------------------------- setup --- */
@@ -2283,6 +2729,8 @@ function render() {
              : S.tab === "zones" ? vZones()
              : vScan();
   app.replaceChildren(shell(view));
+  const dr = vDrawer();
+  if (dr) app.append(dr);
 }
 
 /* A signed-in account with no profile row, or an inactive one, reads back

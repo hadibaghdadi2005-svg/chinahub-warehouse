@@ -209,6 +209,77 @@ mod += `
       .map(c => c.textContent).join(" "), cls:"" };
   } catch (e) { out["payment-dialog"] = { ok:false, err:e && e.message }; }
 
+  // the parcel drawer
+  const full = {
+    barcode:"YT7600000000001", name:"Carbon pool cue set", customer:"Karim Nassif",
+    client_id:"1000002", phone:"0961-0000001", shipment:"SH2025100000001",
+    status:"shelved", zone:"C", shelf:"C18-01-01", qty:1,
+    weight_kg:1.67, cbm:0.006055, dims:"86.5×10×7 cm",
+    origin:"Chinahub Guangzhou", route:"Chinahub Air Cargo LB", notes:null,
+    inbound_at:"2026-07-13T00:00:00Z", shipped_at:"2026-07-15T00:00:00Z",
+    received_at:"2026-10-28T14:51:02Z", shelved_at:"2026-10-29T12:36:02Z",
+    released_at:null, delivered_at:null, age_days:107,
+    cost:25.01, cny:152.55, declared:192.83, currency:"USD",
+    paid:false, paid_at:null, pay_method:"Cash on delivery",
+  };
+  const events = [
+    { id:3, at:"2026-10-29T12:36:02Z", actor:"u1", from_status:"received",
+      to_status:"shelved", loc:"C18-01-01", note:"floor scan" },
+    { id:1, at:"2026-10-28T14:51:02Z", actor:null, from_status:null,
+      to_status:"received", loc:"SHIP", note:"imported from dashboard export" },
+  ];
+  S.cfg = { lbpRate:89500, lanes:[
+    { label:"Air · Guangzhou", match:"Air Cargo LB", basis:"kg", price:14.5 },
+  ] };
+  S.stats = { free_days:14, long_stay_days:90 };
+
+  S.me = { id:"u2", name:"Office", role:"office", active:true };
+  S.drawer = { barcode:full.barcode, loading:false, parcel:full,
+               events, names:{ u1:"Ali Nasser" } };
+  build("drawer-office", () => vDrawer());
+
+  S.me = { id:"u3", name:"Hadi", role:"admin", active:true };
+  build("drawer-admin", () => vDrawer());
+
+  /* A scanner's copy is what the DATABASE would hand back: money nulled. */
+  S.me = { id:"u1", name:"Ali Nasser", role:"scanner", active:true };
+  S.drawer = { barcode:full.barcode, loading:false,
+    parcel:{ ...full, cost:null, cny:null, declared:null, currency:null,
+             paid:null, paid_at:null, pay_method:null },
+    events, names:{ u1:"Ali Nasser" } };
+  build("drawer-scanner", () => vDrawer());
+
+  S.drawer = { barcode:full.barcode, loading:true, parcel:null, events:null, names:{} };
+  build("drawer-loading", () => vDrawer());
+  S.drawer = { barcode:full.barcode, loading:false, parcel:full, events:null, names:{} };
+  build("drawer-history-pending", () => vDrawer());
+  S.drawer = { barcode:full.barcode, loading:false, parcel:full, events:[], names:{} };
+  build("drawer-no-history", () => vDrawer());
+
+  // the edit form must offer each role only what it may change
+  document.body.children = [];
+  S.me = { id:"u1", name:"Ali Nasser", role:"scanner", active:true };
+  try {
+    askEdit(full);
+    out["edit-scanner"] = { ok:true,
+      text: document.body.children.map(c => c.textContent).join(" "), cls:"" };
+  } catch (e) { out["edit-scanner"] = { ok:false, err:e && e.message }; }
+  document.body.children = [];
+  S.me = { id:"u2", name:"Office", role:"office", active:true };
+  try {
+    askEdit(full);
+    out["edit-office"] = { ok:true,
+      text: document.body.children.map(c => c.textContent).join(" "), cls:"" };
+  } catch (e) { out["edit-office"] = { ok:false, err:e && e.message }; }
+  document.body.children = [];
+  S.me = { id:"u3", name:"Hadi", role:"admin", active:true };
+  try {
+    askDeleteParcel(full);
+    out["delete-dialog"] = { ok:true,
+      text: document.body.children.map(c => c.textContent).join(" "), cls:"" };
+  } catch (e) { out["delete-dialog"] = { ok:false, err:e && e.message }; }
+  S.drawer = null;
+
   // setup — office may look, only an admin may change
   S.tab = "setup";
   S.cfg = {
@@ -347,6 +418,48 @@ expect("money", "not set");
 expect("money-paged", "101–102 of 501");
 expect("payment-dialog", "across 1,185 parcels");
 expect("payment-dialog", "Mark $22,579.10 paid");
+
+expect("drawer-office", "Karim Nassif");
+expect("drawer-office", "C18-01-01");
+expect("drawer-office", "$25.01");
+expect("drawer-office", "Air · Guangzhou");
+expect("drawer-office", "$14.50 per kg");
+expect("drawer-office", "Mark paid");
+expect("drawer-office", "Ali Nasser");
+expect("drawer-office", "before sign-in");   /* the import line has no actor */
+expect("drawer-office", "here 107 days");
+expect("drawer-admin", "Delete");
+expect("drawer-no-history", "Nothing recorded yet");
+expect("drawer-scanner", "C18-01-01");
+expect("edit-scanner", "Description");
+expect("edit-office", "Charge (USD)");
+expect("delete-dialog", "whole history go for good");
+
+/* A scanner's drawer must carry no money at all, and offer no payment. */
+const dsc = (out["drawer-scanner"] || {}).text || "";
+for (const bad of ["$", "25.01", "152.55", "Mark paid", "Payment", "Declared"])
+  if (dsc.includes(bad)) {
+    fail++; console.log("  FAIL  drawer-scanner shows " + JSON.stringify(bad));
+  } else pass++;
+
+/* And the edit form must not offer a scanner a field the database refuses. */
+const esc = (out["edit-scanner"] || {}).text || "";
+for (const bad of ["Charge (USD)", "Customer", "Phone", "Client number", "Declared"])
+  if (esc.includes(bad)) {
+    fail++; console.log("  FAIL  edit-scanner offers " + JSON.stringify(bad));
+  } else pass++;
+/* while still offering what it may fix */
+for (const good of ["Description", "Box size", "Weight (kg)", "Notes"])
+  if (!esc.includes(good)) {
+    fail++; console.log("  FAIL  edit-scanner is missing " + JSON.stringify(good));
+  } else pass++;
+
+/* Admin must not be offered Delete on someone else's screen by accident:
+   only the drawer's own footer has it, and only for an admin. */
+const dof = (out["drawer-office"] || {}).text || "";
+if (/\bDelete\b/.test(dof)) {
+  fail++; console.log("  FAIL  office is offered Delete in the drawer");
+} else pass++;
 
 expect("setup-admin", "Price per lane");
 expect("setup-admin", "Free storage days");
