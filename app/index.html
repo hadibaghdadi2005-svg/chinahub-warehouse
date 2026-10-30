@@ -262,6 +262,14 @@ select.inp{appearance:none;background-image:linear-gradient(45deg,transparent 49
   .ht{min-width:0}
 }
 
+/* ---------- import mapping ---------- */
+.maplist{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:7px 14px;margin-bottom:10px}
+.maprow{display:flex;align-items:center;gap:9px}
+.ml{font-size:12.5px;color:var(--fg-dim);font-weight:600;min-width:132px;flex:none}
+.maprow .inp{min-height:36px;padding:5px 9px;font-size:13px;flex:1;min-width:0}
+.maprow select.inp{background-position:calc(100% - 14px) 15px,calc(100% - 8px) 15px}
+input[type=file].inp{padding:8px 10px;cursor:pointer}
+
 /* ---------- lane table ---------- */
 .lanetbl{display:flex;flex-direction:column;gap:6px}
 .lanehd,.lanerow{display:grid;grid-template-columns:1.2fr 1.4fr .8fr .7fr .6fr auto;gap:7px;align-items:center}
@@ -360,6 +368,11 @@ const S = {
   cfgDraft: null,      /* edits in progress; nothing is written until Save */
   cfgSaving: false,
   drawer: null,        /* the parcel currently open over everything */
+
+  /* import */
+  imp: null,           /* the file being brought in: headers, rows, mapping */
+  impBusy: false, impChecking: false, impRunning: false,
+  impDone: 0, impPreview: null, impResult: null, impError: "",
   laneCover: null,     /* how many parcels each lane would take */
   coverBusy: false,
 
@@ -2131,6 +2144,7 @@ function vSetup() {
   v.append(acts);
 
   v.append(zonesSection());
+  v.append(importSection());
   return v;
 }
 
@@ -2471,6 +2485,583 @@ async function removeZone(z, scrim, err) {
   toast("Zone " + z.code + " deleted", "ok");
   S.zoneStats = null;
   loadZones();
+}
+
+/* ---------------------------------------------------------------- import --- */
+/* The weekly dashboard export, brought in. An .xlsx is a zip of XML, and the
+   browser can already inflate and decode both, so this reads one directly
+   rather than pulling in a spreadsheet library the size of the whole app.
+   Everything here only prepares rows — the merge itself is one call to the
+   database, where it is atomic and where the rules about what may overwrite
+   what are written down once. */
+
+/* ------------------------------------------------------------- the zip --- */
+async function inflateRaw(bytes) {
+  const ds = new DecompressionStream("deflate-raw");
+  const stream = new Blob([bytes]).stream().pipeThrough(ds);
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+async function unzip(buf) {
+  const u8 = new Uint8Array(buf);
+  const dv = new DataView(buf);
+  /* The end-of-central-directory record sits at the back, after a comment of
+     unknown length, so scan backwards for its signature. */
+  let eocd = -1;
+  for (let i = u8.length - 22; i >= 0 && i > u8.length - 65558; i--)
+    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  if (eocd < 0) throw new Error("That does not look like an .xlsx file.");
+
+  const count = dv.getUint16(eocd + 10, true);
+  let p = dv.getUint32(eocd + 16, true);
+  const dec = new TextDecoder();
+  const out = new Map();
+
+  for (let n = 0; n < count; n++) {
+    if (dv.getUint32(p, true) !== 0x02014b50) break;
+    const method = dv.getUint16(p + 10, true);
+    const compSize = dv.getUint32(p + 20, true);
+    const nameLen = dv.getUint16(p + 28, true);
+    const extraLen = dv.getUint16(p + 30, true);
+    const commLen = dv.getUint16(p + 32, true);
+    const localAt = dv.getUint32(p + 42, true);
+    const name = dec.decode(u8.subarray(p + 46, p + 46 + nameLen));
+    /* The local header repeats the name and carries its own extra field,
+       whose length can differ from the central directory's. */
+    const lNameLen = dv.getUint16(localAt + 26, true);
+    const lExtraLen = dv.getUint16(localAt + 28, true);
+    const start = localAt + 30 + lNameLen + lExtraLen;
+    const raw = u8.subarray(start, start + compSize);
+    /* Only the few parts that hold the sheet are worth inflating. */
+    if (/^xl\/(worksheets\/sheet1\.xml|sharedStrings\.xml)$/.test(name))
+      out.set(name, method === 0 ? raw : await inflateRaw(raw));
+    p += 46 + nameLen + extraLen + commLen;
+  }
+  return out;
+}
+
+const xmlDecode = s => s
+  .replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+  .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+  .replace(/&#(\d+);/g, (m, d) => String.fromCharCode(+d))
+  .replace(/&#x([0-9a-fA-F]+);/g, (m, h) => String.fromCharCode(parseInt(h, 16)))
+  .replace(/&amp;/g, "&");          /* last, or real ampersands double-decode */
+
+/* "B12" -> 1. Column letters are base-26 with A = 1. */
+function columnIndex(ref) {
+  const letters = ref.match(/^([A-Z]+)/)[1];
+  let n = 0;
+  for (const ch of letters) n = n * 26 + (ch.charCodeAt(0) - 64);
+  return n - 1;
+}
+
+async function readXlsx(file) {
+  const zip = await unzip(await file.arrayBuffer());
+  const dec = new TextDecoder();
+  const sheet = zip.get("xl/worksheets/sheet1.xml");
+  if (!sheet) throw new Error("No first sheet in that file.");
+  const ssFile = zip.get("xl/sharedStrings.xml");
+  const strings = [];
+  if (ssFile) {
+    const xml = dec.decode(ssFile);
+    for (const m of xml.matchAll(/<si(?:\s[^>]*)?>([\s\S]*?)<\/si>|<si\s*\/>/g)) {
+      let s = "";
+      for (const t of (m[1] || "").matchAll(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g)) s += t[1];
+      strings.push(xmlDecode(s));
+    }
+  }
+  const xml = dec.decode(sheet);
+  const rows = [];
+  for (const rm of xml.matchAll(/<row(?:\s[^>]*)?>([\s\S]*?)<\/row>/g)) {
+    const row = [];
+    for (const cm of rm[1].matchAll(/<c\s([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
+      const attrs = cm[1], body = cm[2] || "";
+      const ref = (attrs.match(/r="([A-Z]+\d+)"/) || [])[1];
+      const type = (attrs.match(/t="([^"]+)"/) || [])[1] || "n";
+      let v = "";
+      if (type === "inlineStr") {
+        for (const t of body.matchAll(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g)) v += t[1];
+        v = xmlDecode(v);
+      } else {
+        const vm = body.match(/<v>([\s\S]*?)<\/v>/);
+        const raw = vm ? vm[1] : "";
+        v = type === "s" ? (strings[+raw] ?? "") : xmlDecode(raw);
+      }
+      if (ref) row[columnIndex(ref)] = v; else row.push(v);
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
+function parseCsv(text) {
+  const rows = []; let row = [], cell = "", q = false;
+  const t = String(text).replace(/\r\n?/g, "\n");
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    if (q) {
+      if (ch === '"') { if (t[i + 1] === '"') { cell += '"'; i++; } else q = false; }
+      else cell += ch;
+    } else if (ch === '"') { q = true; }
+    else if (ch === "," || ch === ";" || ch === "\t") { row.push(cell); cell = ""; }
+    else if (ch === "\n") {
+      row.push(cell); cell = "";
+      if (row.some(c => c.trim() !== "")) rows.push(row);
+      row = [];
+    } else cell += ch;
+  }
+  row.push(cell);
+  if (row.some(c => c.trim() !== "")) rows.push(row);
+  return rows;
+}
+
+/* --------------------------------------------------------- the columns --- */
+const IMPORT_FIELDS = [
+  ["barcode", "Barcode / order no."], ["name", "Item name"], ["clientId", "Client ID"],
+  ["customer", "Client name"], ["phone", "Phone"], ["parcel", "Shipment"],
+  ["itemId", "Item ID"], ["qty", "Quantity"],
+  ["weightKg", "Weight (kg)"], ["cbm", "Volume (CBM)"],
+  ["lenCm", "Length (cm)"], ["widCm", "Width (cm)"], ["hgtCm", "Height (cm)"],
+  ["sizeLWH", "Box size (L×W×H)"],
+  ["cny", "Amount (￥)"], ["cost", "Charge (USD)"], ["declared", "Declared value"],
+  ["origin", "Origin warehouse"], ["route", "Route"], ["status", "Status"],
+  ["shippedAtRaw", "Shipped from China"], ["inboundAtRaw", "Into China warehouse"],
+  ["paidAtRaw", "Paid at"], ["payMethod", "Payment method"], ["notes", "Notes"],
+  ["shelf", "Shelf / location"],
+];
+const ALIAS = {
+  barcode: ["barcode", "bar code", "code", "sku", "tracking", "trackingnumber", "trackingno", "awb",
+            "order number", "ordernumber", "order no", "orderno", "package tracking number", "订单号", "包裹单号"],
+  name: ["name", "item", "itemname", "description", "desc", "goods", "product", "productname",
+         "package item name", "packageitemname", "货品名", "商品名", "货品名英文名"],
+  clientId: ["clientid", "client id", "customerid", "customer id", "userid", "客户id"],
+  customer: ["customer", "client", "consignee", "receiver", "customername", "buyer",
+             "username", "user name", "用户名"],
+  phone: ["phone", "mobile", "tel", "telephone", "contact", "mobile phone", "mobilephone", "手机", "电话"],
+  parcel: ["parcel", "parcelno", "parcelnumber", "parcelnum", "box", "carton", "shipment",
+           "shipmentno", "shipment name", "lot"],
+  itemId: ["itemid", "itemno", "ref", "reference", "itemcode"],
+  qty: ["quantity", "qty", "package item quantity", "packageitemquantity",
+        "total package item count", "货品数量", "商品数量"],
+  weightKg: ["weight", "weightkg", "kg", "grossweight", "gw", "实际重量",
+             "outbound actual weight kg", "outboundactualweightkg",
+             "inbound actual weight kg", "inboundactualweightkg", "package weight kg", "packageweightkg"],
+  cbm: ["cbm", "volume", "m3", "cubic", "cubicmeter", "vol", "体积",
+        "outbound volume m", "outboundvolumem", "outbound volume",
+        "package volume m", "packagevolumem", "package volume"],
+  lenCm: ["lengthcm", "length", "长"],
+  widCm: ["widthcm", "width", "宽"],
+  hgtCm: ["heightcm", "height", "高"],
+  sizeLWH: ["package size lwh", "packagesizelwh", "package size", "boxsize", "size", "dimensions", "尺寸", "尺寸cm"],
+  cny: ["actual payment amount", "actualpaymentamount", "amountcny", "rmb", "yuan", "实际支付金额"],
+  cost: ["cost", "price", "charge", "fee", "freight", "chargeusd", "amountusd"],
+  declared: ["total declared value", "totaldeclaredvalue", "declaredvalue", "商品申报价值", "申报价值"],
+  origin: ["warehouse", "origin warehouse", "originwarehouse", "发货仓"],
+  route: ["route name", "routename", "route", "line", "渠道"],
+  status: ["status", "state", "stage"],
+  shelf: ["shelf", "location", "loc", "bin", "rack", "position",
+          "package location", "packagelocation"],
+  paidAtRaw: ["paid at", "paidat", "paidtime", "付款时间"],
+  shippedAtRaw: ["shipped at", "shippedat", "shipped", "发货时间", "出库时间"],
+  inboundAtRaw: ["package inbound time", "inbound time", "inboundtime", "入库时间"],
+  payMethod: ["payment method", "paymentmethod", "payment", "paymentstatus", "paid", "ispaid", "settled"],
+  notes: ["notes", "note", "remark", "remarks", "comment", "comments",
+          "warehouse remark", "warehouseremark", "备注"],
+};
+/* Where a sheet has several columns a field could take, the exact header wins. */
+const PREFER = {
+  barcode: ["ordernumber"], name: ["packageitemname"], customer: ["username"],
+  parcel: ["shipment"], qty: ["packageitemquantity"], weightKg: ["outboundactualweightkg"],
+  cbm: ["outboundvolumem"], cny: ["actualpaymentamount"],
+  origin: ["warehouse"], route: ["routename"], notes: ["warehouseremark"],
+};
+const hkey = s => String(s || "").toLowerCase().replace(/[^a-z0-9一-鿿]/g, "");
+
+function guessMap(headers) {
+  const m = {}, keys = headers.map(hkey), taken = new Set();
+  for (const fld in PREFER)
+    for (const want of PREFER[fld]) {
+      const i = keys.indexOf(hkey(want));
+      if (i >= 0 && !taken.has(i)) { m[fld] = i; taken.add(i); break; }
+    }
+  keys.forEach((k, i) => {
+    if (!k || taken.has(i)) return;
+    for (const fld in ALIAS) {
+      if (m[fld] != null) continue;
+      if (ALIAS[fld].some(a => hkey(a) === k)) { m[fld] = i; taken.add(i); return; }
+    }
+  });
+  /* The dashboard's location column is months out of date — it is what the
+     shelf reconciliation had to work around. Never map it by default. */
+  delete m.shelf;
+  return m;
+}
+
+/* "2026-10-22 15:00:16" and friends. Anything that is not a real past date is
+   treated as no date at all, rather than becoming 1970 or next year. */
+function parseStamp(s) {
+  const t = String(s || "").trim();
+  if (!t || /^0+$/.test(t)) return null;
+  const m = t.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  if (!m) return null;
+  const y = +m[1], mo = +m[2], d = +m[3];
+  if (y < 2000 || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  const when = new Date(y, mo - 1, d, +(m[4] || 0), +(m[5] || 0), +(m[6] || 0));
+  if (isNaN(when) || when.getTime() > Date.now() + 86400000) return null;
+  return when.toISOString();
+}
+
+const normStatus = s => {
+  const k = String(s || "").toLowerCase();
+  if (/deliver/.test(k)) return "delivered";
+  if (/release|out for|driver/.test(k)) return "released";
+  if (/shelf|shelved|stored/.test(k)) return "shelved";
+  if (/transit|on the way|expect|pending/.test(k)) return "expected";
+  if (/receiv|arriv|warehouse/.test(k)) return "received";
+  return "";
+};
+
+/* Turn the mapped sheet into the rows the database's importer expects. */
+function buildImportRows() {
+  const { headers, data, map } = S.imp;
+  const rate = Number(S.cfg && S.cfg.cnyPerUsd) || 0;
+  const num = s => {
+    const n = parseFloat(String(s).replace(/[^\d.-]/g, ""));
+    return isFinite(n) ? n : 0;
+  };
+  const rows = [];
+  let noBarcode = 0;
+  const seen = new Set();
+  let dupes = 0;
+
+  for (const r of data) {
+    const cell = f => (map[f] != null && r[map[f]] != null) ? String(r[map[f]]).trim() : "";
+    const barcode = normBc(cell("barcode"));
+    if (!barcode) { noBarcode++; continue; }
+    if (seen.has(barcode)) dupes++;
+    seen.add(barcode);
+
+    const o = { barcode };
+    const put = (k, v) => { if (v !== "" && v != null) o[k] = v; };
+    put("name", cell("name"));
+    put("item_id", cell("itemId"));
+    put("client_id", cell("clientId"));
+    put("customer", cell("customer"));
+    /* some exports lose the country code and leave a leading dash */
+    put("phone", cell("phone").replace(/^[-\s]+/, "").trim());
+    put("shipment", cell("parcel"));
+    put("origin", cell("origin"));
+    put("route", cell("route"));
+    put("notes", cell("notes"));
+    if (cell("qty")) o.qty = Math.round(num(cell("qty")));
+    if (cell("weightKg")) o.weight_kg = num(cell("weightKg"));
+    if (cell("declared")) o.declared = num(cell("declared"));
+
+    /* Volume: an explicit CBM column if there is one, otherwise worked out
+       from the box, which avoids the chargeable column meaning CBM on sea
+       routes and kilos on air. */
+    let cbm = num(cell("cbm"));
+    const L = num(cell("lenCm")), W = num(cell("widCm")), H = num(cell("hgtCm"));
+    if (L && W && H) {
+      o.dims = L + "×" + W + "×" + H + " cm";
+      if (!cbm) cbm = +((L * W * H) / 1e6).toFixed(6);
+    } else {
+      const parts = cell("sizeLWH").split(/[*x×X,\s]+/).map(num).filter(n => n > 0);
+      if (parts.length === 3) {
+        o.dims = parts[0] + "×" + parts[1] + "×" + parts[2] + " cm";
+        if (!cbm) cbm = +((parts[0] * parts[1] * parts[2]) / 1e6).toFixed(6);
+      }
+    }
+    if (cbm) o.cbm = cbm;
+
+    /* Charge: yuan at the rate in Setup, unless a USD column is mapped. */
+    const cny = num(cell("cny"));
+    if (cny) { o.cny = cny; if (rate > 0) o.cost = +(cny / rate).toFixed(2); }
+    if (cell("cost")) o.cost = num(cell("cost"));
+
+    const shipped = parseStamp(cell("shippedAtRaw"));
+    if (shipped) o.shipped_at = shipped;
+    const inbound = parseStamp(cell("inboundAtRaw"));
+    if (inbound) o.inbound_at = inbound;
+
+    const paidAt = cell("paidAtRaw"), pm = cell("payMethod");
+    if (pm) o.pay_method = pm;
+    /* A real paid-at date means settled; "cash on delivery" means not yet. */
+    if (map.paidAtRaw != null) o.paid = !!parseStamp(paidAt);
+    else if (/cash on delivery|\bcod\b|unpaid|not paid/i.test(pm)) o.paid = false;
+    else if (/\bpaid\b|settled|prepaid/i.test(pm)) o.paid = true;
+
+    if (map.status != null) { const st = normStatus(cell("status")); if (st) o.status = st; }
+    rows.push(o);
+  }
+
+  /* A column can be mapped correctly and still be empty from top to bottom —
+     the dashboard lets you tick a column it then exports blank. That looks
+     exactly like a successful import until someone goes looking for the
+     figure, so it is worth saying out loud. */
+  const produced = new Set();
+  for (const r of rows) for (const k in r) produced.add(k);
+  const SENDS = {
+    name: "name", clientId: "client_id", customer: "customer", phone: "phone",
+    parcel: "shipment", itemId: "item_id", qty: "qty", weightKg: "weight_kg",
+    cbm: "cbm", declared: "declared", cny: "cny", cost: "cost",
+    origin: "origin", route: "route", notes: "notes", payMethod: "pay_method",
+    shippedAtRaw: "shipped_at", inboundAtRaw: "inbound_at",
+  };
+  const emptyCols = [];
+  for (const f in SENDS)
+    if (map[f] != null && !produced.has(SENDS[f]))
+      emptyCols.push((IMPORT_FIELDS.find(x => x[0] === f) || [f, f])[1] +
+        " (" + (headers[map[f]] || "column " + (map[f] + 1)) + ")");
+
+  return { rows, noBarcode, dupes, emptyCols };
+}
+
+/* ------------------------------------------------------------ the card --- */
+function importSection() {
+  const card = el("div", "card pad");
+  card.style.marginTop = "18px";
+  const hr = el("div", "hr-t");
+  hr.append(el("span", "sect-t", "Bring a list in"));
+  card.append(hr);
+  const p = el("div", "sub2");
+  p.style.margin = "8px 0 12px";
+  p.textContent = "Export from the ChinaHub dashboard and drop the file here. " +
+    "Excel (.xlsx) and CSV are both read; the first sheet is used. A barcode already " +
+    "here is refreshed, a new one is added.";
+  card.append(p);
+
+  if (!isAdmin() && !sees_money()) return card;
+
+  const imp = S.imp;
+  if (!imp) {
+    const row = el("div", "row");
+    const pick = el("input");
+    pick.type = "file";
+    pick.accept = ".csv,.xlsx,.tsv,text/csv";
+    pick.className = "inp";
+    pick.onchange = () => { if (pick.files && pick.files[0]) readImportFile(pick.files[0]); };
+    row.append(pick);
+    card.append(row);
+    if (S.impBusy) {
+      const b = el("div", "sub2");
+      b.style.marginTop = "8px";
+      b.append(el("span", "spin"));
+      b.append(document.createTextNode(" reading the file…"));
+      card.append(b);
+    }
+    if (S.impError) card.append(banner("bad", "Could not read that file", S.impError));
+    return card;
+  }
+
+  /* --- what came out of the file --- */
+  card.append(banner(null, imp.fileName,
+    nf0.format(imp.data.length) + " rows, " + imp.headers.length + " columns."));
+
+  /* --- the mapping --- */
+  const tbl = el("div", "maplist");
+  for (const [fld, label] of IMPORT_FIELDS) {
+    const row = el("div", "maprow");
+    row.append(el("span", "ml", label));
+    const sel = el("select", "inp");
+    const none = el("option", null, "— not used —");
+    none.value = "";
+    sel.append(none);
+    imp.headers.forEach((hname, i) => {
+      const o = el("option", null, (hname || "(column " + (i + 1) + ")").slice(0, 60));
+      o.value = String(i);
+      if (imp.map[fld] === i) o.selected = true;
+      sel.append(o);
+    });
+    sel.onchange = () => {
+      if (sel.value === "") delete imp.map[fld];
+      else imp.map[fld] = +sel.value;
+      S.impPreview = null;
+      render();
+    };
+    row.append(sel);
+    tbl.append(row);
+  }
+  card.append(tbl);
+
+  /* The one column that must not be trusted. */
+  if (imp.map.shelf != null)
+    card.append(banner("warn", "That location column is months out of date",
+      "The dashboard's location is where the parcel sat in China, not on your shelves — " +
+      "it was the whole reason the floor had to be re-scanned. Importing it will " +
+      "overwrite good scan data. Set it back to “not used” unless you are certain."));
+
+  /* --- where new parcels land --- */
+  const opts = el("div", "g2");
+  opts.style.marginTop = "12px";
+  const sw = el("label", "field");
+  sw.append(el("span", null, "New parcels arrive as"));
+  const ss = el("select", "inp");
+  for (const k of ["expected", "received", "shelved", "released", "delivered"]) {
+    const o = el("option", null, STATUS[k]);
+    o.value = k;
+    if (imp.status === k) o.selected = true;
+    ss.append(o);
+  }
+  ss.onchange = () => { imp.status = ss.value; };
+  sw.append(ss);
+  sw.append(el("div", "sub2", "Only for barcodes not already here. A parcel already " +
+    "on a shelf keeps its status and its shelf."));
+  opts.append(sw);
+
+  const zw = el("label", "field");
+  zw.append(el("span", null, "and land in"));
+  const zs = el("select", "inp");
+  const zn = el("option", null, "— nowhere in particular —");
+  zn.value = "";
+  zs.append(zn);
+  for (const z of S.zones) {
+    const o = el("option", null, z.label || z.code);
+    o.value = z.code;
+    if (imp.zone === z.code) o.selected = true;
+    zs.append(o);
+  }
+  zs.onchange = () => { imp.zone = zs.value; };
+  zw.append(zs);
+  opts.append(zw);
+  card.append(opts);
+
+  /* --- preview --- */
+  const pv = el("div", "row");
+  pv.style.marginTop = "12px";
+  const check = el("button", "btn sm", S.impChecking ? "Checking…" : "Check against what is here");
+  check.type = "button";
+  check.disabled = !!S.impChecking || imp.map.barcode == null;
+  check.onclick = checkImport;
+  pv.append(check);
+  card.append(pv);
+
+  if (imp.map.barcode == null)
+    card.append(banner("bad", "Pick the barcode column",
+      "Nothing can be matched without it."));
+
+  const pr = S.impPreview;
+  if (pr) {
+    card.append(banner(pr.noBarcode ? "warn" : null,
+      nf0.format(pr.newOnes) + " new · " + nf0.format(pr.existing) + " already here",
+      (pr.noBarcode ? nf0.format(pr.noBarcode) + " rows have no barcode and will be skipped. " : "") +
+      (pr.dupes ? nf0.format(pr.dupes) + " repeated barcodes will collapse into one. " : "") +
+      "Nothing has been written yet."));
+    if (pr.emptyCols && pr.emptyCols.length)
+      card.append(banner("warn", "Mapped, but blank in every row",
+        pr.emptyCols.join(", ") + ". The dashboard will let you tick a column it then " +
+        "exports empty. Nothing already here will be blanked — but nothing will be " +
+        "filled in either, so tick it properly and export again if you need it."));
+  }
+
+  const acts = el("div", "row");
+  acts.style.marginTop = "10px";
+  const go = el("button", "btn pri", S.impRunning
+    ? "Bringing them in… " + nf0.format(S.impDone || 0)
+    : "Bring them in");
+  go.type = "button";
+  go.disabled = imp.map.barcode == null || !!S.impRunning;
+  go.onclick = runImport;
+  acts.append(go);
+  const cancel = el("button", "btn", "Cancel");
+  cancel.type = "button";
+  cancel.disabled = !!S.impRunning;
+  cancel.onclick = () => {
+    S.imp = null; S.impPreview = null; S.impError = ""; render();
+  };
+  acts.append(cancel);
+  card.append(acts);
+
+  if (S.impResult)
+    card.append(banner("ok", "Done",
+      nf0.format(S.impResult.inserted) + " added, " +
+      nf0.format(S.impResult.updated) + " refreshed."));
+  return card;
+}
+
+async function readImportFile(file) {
+  S.impBusy = true; S.impError = ""; S.impResult = null; render();
+  try {
+    let rows;
+    if (/\.xlsx$/i.test(file.name)) rows = await readXlsx(file);
+    else rows = parseCsv(await file.text());
+    /* Drop fully blank rows and anything above the header. */
+    rows = rows.filter(r => r && r.some(c => String(c == null ? "" : c).trim() !== ""));
+    if (rows.length < 2) throw new Error("There is no data under the header row.");
+    const headers = rows[0].map(h => String(h == null ? "" : h).trim());
+    S.imp = {
+      fileName: file.name, headers, data: rows.slice(1),
+      map: guessMap(headers), status: "received", zone: "",
+    };
+    S.impPreview = null;
+  } catch (e) {
+    S.impError = (e && e.message) || String(e);
+    S.imp = null;
+  }
+  S.impBusy = false;
+  render();
+  if (S.imp) checkImport();
+}
+
+/* Which barcodes are already here. Asked in chunks, because a URL carrying
+   three thousand of them would not survive the trip. */
+async function checkImport() {
+  if (!S.imp || S.imp.map.barcode == null) return;
+  S.impChecking = true; render();
+  const { rows, noBarcode, dupes, emptyCols } = buildImportRows();
+  const codes = rows.map(r => r.barcode);
+  let existing = 0;
+  for (let i = 0; i < codes.length; i += 300) {
+    const chunk = codes.slice(i, i + 300);
+    const { data, error } = await S.sb.from("parcels_view")
+      .select("barcode").in("barcode", chunk);
+    if (error) {
+      S.impChecking = false;
+      toast("Could not check against the warehouse — " + error.message, "bad");
+      render();
+      return;
+    }
+    existing += (data || []).length;
+  }
+  S.impPreview = { total: rows.length, newOnes: rows.length - existing, existing,
+                   noBarcode, dupes, emptyCols };
+  S.impChecking = false;
+  render();
+}
+
+async function runImport() {
+  if (!S.imp || S.imp.map.barcode == null) return;
+  const { rows } = buildImportRows();
+  if (!rows.length) { toast("No rows with a barcode.", "bad"); return; }
+
+  S.impRunning = true; S.impDone = 0; S.impResult = null; render();
+  let inserted = 0, updated = 0;
+  try {
+    for (let i = 0; i < rows.length; i += 400) {
+      const chunk = rows.slice(i, i + 400);
+      const { data, error } = await S.sb.rpc("import_parcels", {
+        p_rows: chunk,
+        p_default_status: S.imp.status,
+        p_default_zone: S.imp.zone || null,
+      });
+      if (error) throw error;
+      const r = (data && data[0]) || {};
+      inserted += Number(r.inserted) || 0;
+      updated += Number(r.updated) || 0;
+      S.impDone = Math.min(i + chunk.length, rows.length);
+      render();
+    }
+    S.impResult = { inserted, updated };
+    S.imp = null; S.impPreview = null;
+    toast(nf0.format(inserted) + " added, " + nf0.format(updated) + " refreshed", "ok");
+    S.rows = null; S.stats = null; S.money = null;
+    S.customers = null; S.zoneStats = null;
+  } catch (e) {
+    toast("Stopped after " + nf0.format(S.impDone) + " rows — " +
+      ((e && e.message) || "something went wrong"), "bad");
+  }
+  S.impRunning = false;
+  render();
 }
 
 /* ----------------------------------------------------------------- staff --- */
