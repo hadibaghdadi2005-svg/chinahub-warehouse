@@ -365,6 +365,31 @@ mod += `
   } catch (e) { out["bulk-paid-dialog"] = { ok:false, err:e && e.message }; }
   S.sel = new Set();
 
+  // The import must not let a wrong Barcode column invent parcels. This is
+  // what thirty-four shelf labels looked like on their way in.
+  S.cfg = { cnyPerUsd: 6.1 };
+  S.imp = { fileName:"scan.csv", kind:"export",
+    headers:["barcode","shelf","scanned at"],
+    data:[["YT7600000000002","C20-01-05","2026-10-30T12:31:23Z"],
+          ["430000000000001","C20-01-05","2026-10-30T12:31:17Z"],
+          ["770000000000001","C-04-03","2026-10-30T12:31:52Z"]],
+    map:{ barcode:1 }, status:"received", zone:"" };
+  const wrong = buildImportRows();
+  out["import-wrong-column"] = { ok:true,
+    text: JSON.stringify({ distinct: wrong.distinct, bad: wrong.notParcelNos.length,
+                           bare: wrong.bare }), cls:"" };
+  S.impPreview = { total:wrong.rows.length, newOnes:wrong.rows.length, existing:0,
+    noBarcode:wrong.noBarcode, dupes:wrong.dupes, emptyCols:wrong.emptyCols,
+    notParcelNos:wrong.notParcelNos, bare:wrong.bare, distinct:wrong.distinct };
+  build("import-blocked", () => importSection());
+
+  // and the right column must sail through
+  S.imp.map = { barcode:0 };
+  const right = buildImportRows();
+  out["import-right-column"] = { ok:true,
+    text: JSON.stringify({ distinct: right.distinct, bad: right.notParcelNos.length }), cls:"" };
+  S.imp = null; S.impPreview = null;
+
   // zones
   S.tab = "zones";
   S.zoneStats = [
@@ -592,6 +617,13 @@ if (strays.length) {
   fail++;
   console.log("  FAIL  " + strays.length + " filter change(s) reload the list but not the tiles");
 } else pass++;
+
+/* Shelf labels in the barcode column: every one flagged, nothing allowed in. */
+expect("import-wrong-column", '"distinct":2,"bad":2,"bare":3');
+expect("import-blocked", "do not look like parcel numbers");
+expect("import-blocked", "Fix the Barcode column first");
+expect("import-blocked", "load it on the Scan tab instead");
+expect("import-right-column", '"distinct":3,"bad":0');
 
 expect("stock-one-selected", "1 selected");
 expect("stock-one-selected", "Mark paid");

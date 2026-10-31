@@ -3257,7 +3257,18 @@ function buildImportRows() {
       emptyCols.push((IMPORT_FIELDS.find(x => x[0] === f) || [f, f])[1] +
         " (" + (headers[map[f]] || "column " + (map[f] + 1)) + ")");
 
-  return { rows, noBarcode, dupes, emptyCols };
+  /* Point the barcode row at the wrong column and the import will cheerfully
+     invent a parcel per distinct value. It happened: thirty-four shelf labels
+     became thirty-four empty parcels. A real parcel number is long and mostly
+     digits — the same test the scanner uses to tell a parcel from a shelf — so
+     anything failing it is worth stopping on. */
+  const distinctCodes = new Set(rows.map(r => r.barcode));
+  const notParcelNos = [...distinctCodes].filter(b => !looksLikeParcelNo(b));
+  /* And a row carrying nothing but a barcode would create a blank record. */
+  const bare = rows.filter(r => Object.keys(r).length === 1).length;
+
+  return { rows, noBarcode, dupes, emptyCols, notParcelNos, bare,
+           distinct: distinctCodes.size };
 }
 
 /* ------------------------------------------------------- a floor scan ----- */
@@ -3561,6 +3572,23 @@ function importSection() {
       (pr.noBarcode ? nf0.format(pr.noBarcode) + " rows have no barcode and will be skipped. " : "") +
       (pr.dupes ? nf0.format(pr.dupes) + " repeated barcodes will collapse into one. " : "") +
       "Nothing has been written yet."));
+    if (pr.notParcelNos && pr.notParcelNos.length) {
+      const n = pr.notParcelNos.length;
+      const most = n > (pr.distinct || pr.total) / 2;
+      card.append(banner("bad",
+        nf0.format(n) + " of these do not look like parcel numbers",
+        "A parcel number is long and mostly digits. These are not — " +
+        pr.notParcelNos.slice(0, 8).join(", ") +
+        (n > 8 ? " and " + nf0.format(n - 8) + " more" : "") + ". " +
+        (most ? "The Barcode row is almost certainly pointed at the wrong column; "
+              + "importing this would create a parcel for each of them. "
+              : "They will each become a parcel if they are not already here. ") +
+        "If this is a floor scan, load it on the Scan tab instead."));
+    }
+    if (pr.bare)
+      card.append(banner("warn", nf0.format(pr.bare) + " rows carry nothing but a barcode",
+        "Any of those not already here would be created empty — no name, no " +
+        "customer, no charge. A dashboard export always carries more than that."));
     if (pr.emptyCols && pr.emptyCols.length)
       card.append(banner("warn", "Mapped, but blank in every row",
         pr.emptyCols.join(", ") + ". The dashboard will let you tick a column it then " +
@@ -3570,11 +3598,16 @@ function importSection() {
 
   const acts = el("div", "row");
   acts.style.marginTop = "10px";
+  /* When most of the "barcodes" are not barcodes, the mapping is wrong and
+     going ahead would make a mess that has to be cleaned out of the database
+     afterwards. Better to stop than to warn and let it run. */
+  const mostlyWrong = pr && pr.notParcelNos &&
+    pr.notParcelNos.length > (pr.distinct || pr.total) / 2;
   const go = el("button", "btn pri", S.impRunning
     ? "Bringing them in… " + nf0.format(S.impDone || 0)
-    : "Bring them in");
+    : mostlyWrong ? "Fix the Barcode column first" : "Bring them in");
   go.type = "button";
-  go.disabled = imp.map.barcode == null || !!S.impRunning;
+  go.disabled = imp.map.barcode == null || !!S.impRunning || mostlyWrong;
   go.onclick = runImport;
   acts.append(go);
   const cancel = el("button", "btn", "Cancel");
@@ -3626,7 +3659,7 @@ async function readImportFile(file) {
 async function checkImport() {
   if (!S.imp || S.imp.map.barcode == null) return;
   S.impChecking = true; render();
-  const { rows, noBarcode, dupes, emptyCols } = buildImportRows();
+  const { rows, noBarcode, dupes, emptyCols, notParcelNos, bare, distinct } = buildImportRows();
   const codes = rows.map(r => r.barcode);
   let existing = 0;
   for (let i = 0; i < codes.length; i += 300) {
@@ -3642,7 +3675,7 @@ async function checkImport() {
     existing += (data || []).length;
   }
   S.impPreview = { total: rows.length, newOnes: rows.length - existing, existing,
-                   noBarcode, dupes, emptyCols };
+                   noBarcode, dupes, emptyCols, notParcelNos, bare, distinct };
   S.impChecking = false;
   render();
 }
