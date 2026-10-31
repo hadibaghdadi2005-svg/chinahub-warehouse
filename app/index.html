@@ -1011,7 +1011,8 @@ function vStock() {
 }
 
 const anyFilter = () =>
-  !!(S.q.trim() || S.filters.status || S.filters.zone || S.filters.paid || S.filters.here);
+  !!(S.q.trim() || S.filters.status || S.filters.zone || S.filters.paid ||
+     S.filters.here || S.filters.client);
 
 function stockTiles() {
   const wrap = el("div", "tiles");
@@ -1022,7 +1023,7 @@ function stockTiles() {
     if (note) b.append(el("div", "n", note));
     b.onclick = () => {
       const f = S.filters;
-      if (!k) S.filters = { status: "", zone: f.zone, paid: "", here: f.here };
+      if (!k) S.filters = { status: "", zone: f.zone, paid: "", here: f.here, client: f.client };
       else if (k === "unpaid" || k === "late" || k === "long")
         S.filters = { ...f, paid: f.paid === k ? "" : k };
       else S.filters = { ...f, status: f.status === k ? "" : k };
@@ -1064,7 +1065,7 @@ function stockFilters() {
   bar.style.marginBottom = "14px";
 
   const q = el("input", "inp mono");
-  q.placeholder = "Barcode, customer, phone, shelf or shipment…";
+  q.placeholder = "Barcode, client number, customer, phone, shelf or shipment…";
   q.value = S.q;
   q.autocomplete = "off";
   q.style.flex = "1 1 240px";
@@ -1091,6 +1092,10 @@ function stockFilters() {
 
   if (S.filters.here) {
     const chip = el("span", "chip admin", "in the building");
+    bar.append(chip);
+  }
+  if (S.filters.client) {
+    const chip = el("span", "chip admin", "client " + S.filters.client);
     bar.append(chip);
   }
 
@@ -1142,7 +1147,11 @@ function recordRow(r) {
   m.append(nm);
   const bits = [];
   if (r.name) bits.push(r.name.length > 48 ? r.name.slice(0, 48) + "…" : r.name);
-  if (r.customer) bits.push("for " + r.customer);
+  /* The client number earns its place: it is what the money screen hands over
+     when you ask for a customer's parcels, so a search by it should visibly
+     match rather than leave you guessing which row it hit. */
+  if (r.customer) bits.push("for " + r.customer + (r.client_id ? " (" + r.client_id + ")" : ""));
+  else if (r.client_id) bits.push("client " + r.client_id);
   bits.push("at " + (r.shelf || r.zone || "—"));
   if (r.shipment) bits.push(r.shipment);
   m.append(el("div", "li-s", bits.join("  ·  ")));
@@ -1168,12 +1177,16 @@ async function loadStock() {
   S.searching = true; render();
   const f = S.filters;
   let qy = S.sb.from("parcels_view")
-    .select("barcode,name,customer,phone,shipment,status,zone,shelf,cost,paid,shipped_at,age_days",
+    .select("barcode,name,client_id,customer,phone,shipment,status,zone,shelf,cost,paid,shipped_at,age_days",
       { count: "exact" });
 
   if (f.status) qy = qy.eq("status", f.status);
   if (f.zone) qy = qy.eq("zone", f.zone);
   if (f.here) qy = qy.not("status", "in", "(released,delivered)");
+  /* "This client's parcels" is an exact question and deserves an exact answer:
+     a short client number like 65 is also a substring of hundreds of barcodes,
+     so asking it as free text buries the answer. */
+  if (f.client) qy = qy.eq("client_id", f.client);
 
   /* "Still here" is what the late and long-stay counts mean, so the list has
      to agree with the tile it came from. */
@@ -1188,6 +1201,7 @@ async function loadStock() {
     const like = "%" + term.replace(/[%,()]/g, " ") + "%";
     qy = qy.or([
       "barcode.ilike." + like,
+      "client_id.ilike." + like,
       "customer.ilike." + like,
       "phone.ilike." + like,
       "shelf.ilike." + like,
@@ -1451,8 +1465,8 @@ function customerRow(c) {
   }
   const sh = el("button", "btn sm", "Parcels");
   sh.onclick = () => {
-    S.q = c.client_id;
-    S.filters = { status: "", zone: "", paid: "" };
+    S.q = "";
+    S.filters = { status: "", zone: "", paid: "", client: c.client_id };
     S.page = 0; S.tab = "stock";
     loadStock();
   };

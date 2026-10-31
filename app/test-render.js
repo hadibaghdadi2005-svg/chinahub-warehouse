@@ -497,5 +497,43 @@ if (/\$|25\.01|39,344|11,503|Unpaid/.test(scannerText)) {
     scannerText.replace(/\s+/g, " ").slice(0, 240));
 } else pass++;
 
+/* ------------------------------------------------------- the search box ---
+ * Building a view proves nothing about the query behind it. A search column
+ * left out of the `or(...)` list looks perfectly healthy on screen and simply
+ * finds nothing — which is exactly how client numbers went missing. So the
+ * columns the box searches are read out of the source and checked against the
+ * columns its own placeholder promises.
+ */
+const orBlock = (mod.match(/qy\.or\(\[([\s\S]*?)\]\.join/) || [])[1] || "";
+const searched = [...orBlock.matchAll(/"([a-z_]+)\.ilike\./g)].map(m => m[1]);
+const placeholder = (mod.match(/q\.placeholder\s*=\s*"([^"]*)"/) || [])[1] || "";
+
+const PROMISED = {
+  barcode: "Barcode", client_id: "client number", customer: "customer",
+  phone: "phone", shelf: "shelf", shipment: "shipment",
+};
+for (const [col, word] of Object.entries(PROMISED)) {
+  if (!searched.includes(col)) {
+    fail++; console.log("  FAIL  the search does not cover " + col);
+  } else pass++;
+  if (!placeholder.toLowerCase().includes(word.toLowerCase())) {
+    fail++; console.log("  FAIL  the placeholder does not mention " + word);
+  } else pass++;
+}
+/* And anything searched should be something the rows actually carry. */
+const stockSelect = (mod.match(/\.select\("(barcode,[^"]*age_days)"/) || [])[1] || "";
+for (const col of searched)
+  if (!stockSelect.split(",").includes(col)) {
+    fail++; console.log("  FAIL  " + col + " is searched but never fetched, so a match is invisible");
+  } else pass++;
+
+/* "This client's parcels" must be an exact filter, not a substring search:
+   a short client number is also a substring of hundreds of barcodes. */
+if (/sh\.onclick[\s\S]{0,200}?S\.q\s*=\s*c\.client_id/.test(mod)) {
+  fail++; console.log("  FAIL  the Parcels button searches by text instead of filtering exactly");
+} else pass++;
+if (/if \(f\.client\) qy = qy\.eq\("client_id", f\.client\)/.test(mod)) pass++;
+else { fail++; console.log("  FAIL  there is no exact client filter"); }
+
 console.log("\n" + Object.keys(out).length + " views built, " + pass + " checks passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);
