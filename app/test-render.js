@@ -333,6 +333,38 @@ mod += `
   S.me = { id:"u3", name:"Hadi", role:"admin", active:true };
   out["tabs-admin"] = { ok:true, text: visibleTabs().map(t => t.label).join(" "), cls:"" };
 
+  // selecting several at once
+  S.tab = "stock"; S.rows = rows; S.total = 2; S.stats = summary;
+  S.me = { id:"u2", name:"Office", role:"office", active:true };
+  S.sel = new Set([rows[0].barcode]);
+  build("stock-one-selected", () => vStock());
+  S.total = 1605;                      /* more matches than are on screen */
+  build("stock-can-select-all", () => vStock());
+  S.total = 2;
+  S.me = { id:"u1", name:"Ali Nasser", role:"scanner", active:true };
+  build("stock-selected-scanner", () => vStock());
+  S.me = { id:"u2", name:"Office", role:"office", active:true };
+
+  document.body.children = [];
+  try {
+    askBulkMove("shelved");
+    out["bulk-shelve-dialog"] = { ok:true,
+      text: document.body.children.map(c => c.textContent).join(" "), cls:"" };
+  } catch (e) { out["bulk-shelve-dialog"] = { ok:false, err:e && e.message }; }
+  document.body.children = [];
+  try {
+    askBulkMove("delivered");
+    out["bulk-deliver-dialog"] = { ok:true,
+      text: document.body.children.map(c => c.textContent).join(" "), cls:"" };
+  } catch (e) { out["bulk-deliver-dialog"] = { ok:false, err:e && e.message }; }
+  document.body.children = [];
+  try {
+    askBulkPaid(true);
+    out["bulk-paid-dialog"] = { ok:true,
+      text: document.body.children.map(c => c.textContent).join(" "), cls:"" };
+  } catch (e) { out["bulk-paid-dialog"] = { ok:false, err:e && e.message }; }
+  S.sel = new Set();
+
   // zones
   S.tab = "zones";
   S.zoneStats = [
@@ -529,7 +561,8 @@ for (const [col, word] of Object.entries(PROMISED)) {
   } else pass++;
 }
 /* And anything searched should be something the rows actually carry. */
-const stockSelect = (mod.match(/\.select\("(barcode,[^"]*age_days)"/) || [])[1] || "";
+const stockSelect = (mod.match(/const STOCK_COLS\s*=\s*\n?\s*"([^"]+)"/) || [])[1] || "";
+if (!stockSelect) { fail++; console.log("  FAIL  could not find STOCK_COLS to check against"); }
 for (const col of searched)
   if (!stockSelect.split(",").includes(col)) {
     fail++; console.log("  FAIL  " + col + " is searched but never fetched, so a match is invisible");
@@ -559,6 +592,30 @@ if (strays.length) {
   fail++;
   console.log("  FAIL  " + strays.length + " filter change(s) reload the list but not the tiles");
 } else pass++;
+
+expect("stock-one-selected", "1 selected");
+expect("stock-one-selected", "Mark paid");
+expect("stock-one-selected", "→ Out for delivery");
+expect("stock-one-selected", "Export");
+expect("stock-can-select-all", "Select all 1,605 matching");
+expect("bulk-shelve-dialog", "Shelf");
+expect("bulk-deliver-dialog", "This clears their shelf");
+expect("bulk-paid-dialog", "How did they pay?");
+
+/* A scanner may move parcels in bulk but must not be offered the money. */
+const bsc = (out["stock-selected-scanner"] || {}).text || "";
+for (const bad of ["Mark paid", "Mark unpaid"])
+  if (bsc.includes(bad)) {
+    fail++; console.log("  FAIL  a scanner is offered " + JSON.stringify(bad) + " in bulk");
+  } else pass++;
+for (const good of ["→ On a shelf", "→ Delivered", "Export"])
+  if (!bsc.includes(good)) {
+    fail++; console.log("  FAIL  a scanner is missing " + JSON.stringify(good));
+  } else pass++;
+
+/* Selection is by barcode, so paging and reloading cannot scramble it. */
+if (/sel: new Set\(\)/.test(mod)) pass++;
+else { fail++; console.log("  FAIL  the selection is not a Set of barcodes"); }
 
 expect("stock-one-client", "of 8,232 in the warehouse");
 expect("stock-one-client", "1,605");

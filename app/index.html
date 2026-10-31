@@ -262,6 +262,18 @@ select.inp{appearance:none;background-image:linear-gradient(45deg,transparent 49
   .ht{min-width:0}
 }
 
+/* ---------- selecting several ---------- */
+.selhead{display:flex;align-items:center;gap:10px;padding:6px 4px 9px;flex-wrap:wrap}
+.tick{width:19px;height:19px;flex:none;accent-color:var(--primary);cursor:pointer;margin:0}
+.selhead input[type=checkbox]{width:19px;height:19px;accent-color:var(--primary);cursor:pointer;margin:0}
+.bulkbar{
+  position:sticky;bottom:calc(10px + env(safe-area-inset-bottom,0px));z-index:40;
+  display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:14px;
+  background:var(--surface);border:1px solid var(--line-strong);border-radius:var(--r);
+  box-shadow:var(--shadow-lg);padding:10px 13px;
+}
+.bulkbar b{font-size:13.5px;margin-right:4px;white-space:nowrap}
+
 /* ---------- import mapping ---------- */
 .maplist{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:7px 14px;margin-bottom:10px}
 .maprow{display:flex;align-items:center;gap:9px}
@@ -373,6 +385,12 @@ const S = {
   cfgDraft: null,      /* edits in progress; nothing is written until Save */
   cfgSaving: false,
   drawer: null,        /* the parcel currently open over everything */
+
+  /* selecting several at once. Held as barcodes, so it survives paging. */
+  sel: new Set(),
+  lastTick: null,
+  bulkBusy: false,
+  selAllBusy: false,
 
   /* import */
   imp: null,           /* the file being brought in: headers, rows, mapping */
@@ -1011,10 +1029,12 @@ function vStock() {
     return v;
   }
 
+  v.append(selectionHead());
   const list = el("div", "list");
   for (const r of S.rows) list.append(recordRow(r));
   v.append(list);
   v.append(pager());
+  if (selCount()) v.append(bulkBar());
   return v;
 }
 
@@ -1153,6 +1173,27 @@ function pager() {
 function recordRow(r) {
   const li = el("div", "li click");
   li.onclick = () => openParcel(r.barcode);
+
+  /* The tick is its own target: tapping the row opens the parcel, tapping the
+     box only selects it. Shift-clicking takes everything between this row and
+     the last one ticked, which is what makes a shelf's worth bearable. */
+  const box = el("input", "tick");
+  box.type = "checkbox";
+  box.checked = S.sel.has(r.barcode);
+  box.onclick = ev => {
+    ev.stopPropagation();
+    const codes = (S.rows || []).map(x => x.barcode);
+    const here = codes.indexOf(r.barcode);
+    if (ev.shiftKey && S.lastTick != null) {
+      const from = Math.min(S.lastTick, here), to = Math.max(S.lastTick, here);
+      for (let i = from; i <= to; i++) box.checked ? S.sel.add(codes[i]) : S.sel.delete(codes[i]);
+    } else {
+      box.checked ? S.sel.add(r.barcode) : S.sel.delete(r.barcode);
+    }
+    S.lastTick = here;
+    render();
+  };
+  li.append(box);
   const m = el("div", "li-m");
   const nm = el("div", "li-nm");
   nm.append(el("span", "mono", r.barcode));
@@ -1186,12 +1227,13 @@ function recordRow(r) {
   return li;
 }
 
-async function loadStock() {
-  S.searching = true; render();
+/* The filters, in one place. The list asks for the columns it shows and an
+   exact count; selecting everything that matches asks the very same question
+   for barcodes alone, so the two can never drift apart. */
+function stockQuery(cols, withCount) {
   const f = S.filters;
   let qy = S.sb.from("parcels_view")
-    .select("barcode,name,client_id,customer,phone,shipment,status,zone,shelf,cost,paid,shipped_at,age_days",
-      { count: "exact" });
+    .select(cols, withCount ? { count: "exact" } : undefined);
 
   if (f.status) qy = qy.eq("status", f.status);
   if (f.zone) qy = qy.eq("zone", f.zone);
@@ -1222,9 +1264,16 @@ async function loadStock() {
     ].join(","));
   }
 
+  return qy.order("updated_at", { ascending: false }).order("barcode");
+}
+
+const STOCK_COLS =
+  "barcode,name,client_id,customer,phone,shipment,status,zone,shelf,cost,paid,shipped_at,age_days";
+
+async function loadStock() {
+  S.searching = true; render();
   const from = S.page * S.pageSize;
-  const { data, error, count } = await qy
-    .order("updated_at", { ascending: false }).order("barcode")
+  const { data, error, count } = await stockQuery(STOCK_COLS, true)
     .range(from, from + S.pageSize - 1);
 
   S.searching = false;
@@ -1267,6 +1316,303 @@ function applyFilters() {
   S.page = 0;
   loadStats();
   loadStock();
+}
+
+/* ------------------------------------------------------------ selecting --- */
+/* Ticking parcels and doing one thing to all of them. The work happens in the
+   database in a single call, so a hundred and fifty parcels either all move or
+   none do, and each one gets its own line in its own history.
+
+   Selecting is by barcode rather than by row, so a selection survives paging
+   and the list reloading under it. */
+
+const selCount = () => S.sel.size;
+
+function selectionHead() {
+  const w = el("div", "selhead");
+  const all = el("input");
+  all.type = "checkbox";
+  const pageCodes = (S.rows || []).map(r => r.barcode);
+  const onPage = pageCodes.filter(b => S.sel.has(b)).length;
+  all.checked = pageCodes.length > 0 && onPage === pageCodes.length;
+  all.indeterminate = onPage > 0 && onPage < pageCodes.length;
+  all.onchange = () => {
+    if (all.checked) pageCodes.forEach(b => S.sel.add(b));
+    else pageCodes.forEach(b => S.sel.delete(b));
+    render();
+  };
+  w.append(all);
+  w.append(el("span", "li-s", selCount()
+    ? nf0.format(selCount()) + " selected"
+    : "Tick parcels to work on several at once"));
+
+  /* Everything that matches, not just this page — but it has to be asked for,
+     and it says how many, because the difference between fifty and eight
+     thousand matters a great deal to what happens next. */
+  if (S.total > (S.rows || []).length) {
+    const more = el("button", "btn sm", S.selAllBusy
+      ? "Collecting…" : "Select all " + nf0.format(S.total) + " matching");
+    more.type = "button";
+    more.disabled = !!S.selAllBusy;
+    more.onclick = selectAllMatching;
+    more.style.marginLeft = "auto";
+    w.append(more);
+  }
+  return w;
+}
+
+/* The same query the list uses, asking only for barcodes, a page at a time. */
+async function selectAllMatching() {
+  S.selAllBusy = true; render();
+  const size = 1000;
+  try {
+    for (let from = 0; from < S.total; from += size) {
+      const { data, error } = await stockQuery("barcode", false).range(from, from + size - 1);
+      if (error) throw error;
+      for (const r of (data || [])) S.sel.add(r.barcode);
+      if (!data || !data.length) break;
+    }
+    toast(nf0.format(S.sel.size) + " selected", "ok");
+  } catch (e) {
+    toast("Could not select them all — " + ((e && e.message) || "try again"), "bad");
+  }
+  S.selAllBusy = false;
+  render();
+}
+
+function bulkBar() {
+  const bar = el("div", "bulkbar");
+  bar.append(el("b", null, nf0.format(selCount()) + " selected"));
+
+  const act = (label, fn, cls) => {
+    const b = el("button", "btn sm" + (cls ? " " + cls : ""), label);
+    b.type = "button";
+    b.disabled = !!S.bulkBusy;
+    b.onclick = fn;
+    bar.append(b);
+  };
+
+  if (sees_money()) {
+    act("Mark paid", () => askBulkPaid(true));
+    act("Mark unpaid", () => askBulkPaid(false));
+  }
+  act("→ In the warehouse", () => askBulkMove("received"));
+  act("→ On a shelf", () => askBulkMove("shelved"));
+  act("→ Out for delivery", () => askBulkMove("released"));
+  act("→ Delivered", () => askBulkMove("delivered"));
+  act("Export", exportSelection);
+  act("Clear", () => { S.sel.clear(); render(); });
+  if (S.bulkBusy) bar.append(el("span", "spin"));
+  return bar;
+}
+
+/* Anything that changes a lot of records at once says exactly what it is about
+   to do and waits to be told to. Putting away also needs somewhere to put. */
+function askBulkMove(to) {
+  const n = selCount();
+  const scrim = el("div", "scrim");
+  const m = el("form", "modal");
+  m.append(el("h3", null, "Move " + nf0.format(n) + " parcel" + (n === 1 ? "" : "s")));
+  const sub = el("p", "sub", "to " + (STATUS[to] || to).toLowerCase() +
+    ". Each one gets a line in its history with your name.");
+  sub.style.margin = "4px 0 14px";
+  m.append(sub);
+  const err = el("div");
+  m.append(err);
+
+  let zoneSel = null, shelfInp = null;
+  if (to === "shelved") {
+    const zw = el("label", "field");
+    zw.append(el("span", null, "Zone"));
+    zoneSel = el("select", "inp");
+    const none = el("option", null, "— leave as it is —");
+    none.value = "";
+    zoneSel.append(none);
+    for (const z of S.zones) {
+      const o = el("option", null, z.label || z.code);
+      o.value = z.code;
+      zoneSel.append(o);
+    }
+    zw.append(zoneSel);
+    m.append(zw);
+
+    const sw = el("label", "field");
+    sw.append(el("span", null, "Shelf"));
+    shelfInp = el("input", "inp mono");
+    shelfInp.placeholder = "C21-01-02";
+    sw.append(shelfInp);
+    sw.append(el("div", "sub2", "Leave blank to shelve them without a location. " +
+      "Putting parcels away one at a time on the Scan screen is better — there " +
+      "a shelf label sets this for you."));
+    m.append(sw);
+  }
+  if (to === "released" || to === "delivered")
+    m.append(banner(null, "This clears their shelf",
+      "A parcel out with a driver is not on a shelf any more."));
+  if (n > 200)
+    m.append(banner("warn", "That is a lot of parcels",
+      "Check the filter above the list is what you meant before going ahead."));
+
+  const acts = el("div", "row");
+  const go = el("button", "btn pri", "Move them");
+  go.type = "submit";
+  const no = el("button", "btn", "Cancel");
+  no.type = "button";
+  no.onclick = () => scrim.remove();
+  acts.append(go, no);
+  m.append(acts);
+
+  m.addEventListener("submit", async ev => {
+    ev.preventDefault();
+    const shelf = shelfInp ? shelfInp.value.trim().toUpperCase() : "";
+    if (shelf) {
+      const bad = shelfOutOfRange(shelf);
+      if (bad) { err.replaceChildren(banner("bad", "That shelf does not exist", bad)); return; }
+    }
+    go.disabled = true; no.disabled = true;
+    scrim.remove();
+    await runBulk(() => S.sb.rpc("bulk_move", {
+      p_barcodes: [...S.sel], p_to: to,
+      p_zone: zoneSel ? (zoneSel.value || (shelf ? zoneForShelf(shelf) : "")) || null : null,
+      p_shelf: shelf || null,
+    }), d => nf0.format(d.moved) + " moved" +
+         (d.skipped ? ", " + nf0.format(d.skipped) + " already there" : ""));
+  });
+
+  scrim.append(m);
+  scrim.addEventListener("click", e => { if (e.target === scrim) scrim.remove(); });
+  document.body.append(scrim);
+}
+
+function askBulkPaid(paid) {
+  const n = selCount();
+  const scrim = el("div", "scrim");
+  const m = el("form", "modal");
+  m.append(el("h3", null, (paid ? "Mark " : "Un-mark ") + nf0.format(n) +
+    " parcel" + (n === 1 ? "" : "s") + (paid ? " paid" : "")));
+  const err = el("div");
+  m.append(err);
+
+  let sel = null;
+  if (paid) {
+    const f = el("label", "field");
+    f.append(el("span", null, "How did they pay?"));
+    sel = el("select", "inp");
+    for (const o of ["CASH", "Cash on delivery paid", "WhishPay", "MontyPay",
+                     "Balance Pay", "Cybersource"]) {
+      const x = el("option", null, o);
+      x.value = o;
+      sel.append(x);
+    }
+    f.append(sel);
+    m.append(f);
+  } else {
+    m.append(banner("warn", "This undoes a payment",
+      "Their charges go back to outstanding. Each one is recorded with your name."));
+  }
+
+  const acts = el("div", "row");
+  const go = el("button", "btn pri", paid ? "Mark paid" : "Mark unpaid");
+  go.type = "submit";
+  const no = el("button", "btn", "Cancel");
+  no.type = "button";
+  no.onclick = () => scrim.remove();
+  acts.append(go, no);
+  m.append(acts);
+
+  m.addEventListener("submit", async ev => {
+    ev.preventDefault();
+    scrim.remove();
+    await runBulk(() => S.sb.rpc("bulk_set_paid", {
+      p_barcodes: [...S.sel], p_paid: paid,
+      p_method: sel ? sel.value : "CASH",
+    }), d => nf0.format(d.changed) + (paid ? " marked paid · " + money(d.amount)
+                                           : " marked unpaid"));
+  });
+
+  scrim.append(m);
+  scrim.addEventListener("click", e => { if (e.target === scrim) scrim.remove(); });
+  document.body.append(scrim);
+}
+
+async function runBulk(call, describe) {
+  S.bulkBusy = true; render();
+  const { data, error } = await call();
+  S.bulkBusy = false;
+  if (error) {
+    toast(error.message, "bad");
+    render();
+    return;
+  }
+  const d = (data && data[0]) || {};
+  toast(describe(d), "ok");
+  S.sel.clear();
+  /* Everything downstream of this is now a step behind. */
+  S.stats = null; S.money = null; S.customers = null; S.zoneStats = null;
+  loadStats();
+  loadStock();
+}
+
+/* ------------------------------------------------------------- download --- */
+function offerFile(name, text, type) {
+  try {
+    const blob = new Blob(["﻿" + text], { type: (type || "text/csv") + ";charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = el("a");
+    a.href = url;
+    a.download = name;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    return true;
+  } catch (_) { return false; }
+}
+
+const csvCell = v => {
+  const s = v == null ? "" : String(v);
+  return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+};
+
+/* The selection may be larger than what is on screen, so the rows are fetched
+   back before they can be written out. */
+async function exportSelection() {
+  const codes = [...S.sel];
+  if (!codes.length) { toast("Nothing selected.", "bad"); return; }
+  S.bulkBusy = true; render();
+  const cols = ["barcode", "name", "client_id", "customer", "phone", "shipment",
+                "status", "zone", "shelf", "qty", "weight_kg", "cbm", "dims",
+                "origin", "route", "age_days"];
+  if (sees_money()) cols.push("cost", "paid", "pay_method", "cny", "declared");
+  const rows = [];
+  try {
+    for (let i = 0; i < codes.length; i += 300) {
+      const { data, error } = await S.sb.from("parcels_view")
+        .select(cols.join(",")).in("barcode", codes.slice(i, i + 300));
+      if (error) throw error;
+      rows.push(...(data || []));
+    }
+  } catch (e) {
+    S.bulkBusy = false;
+    toast("Could not read them back — " + ((e && e.message) || "try again"), "bad");
+    render();
+    return;
+  }
+  rows.sort((a, b) => String(a.barcode).localeCompare(String(b.barcode)));
+  const HEAD = { barcode: "Parcel no.", name: "Item", client_id: "Client no.",
+    customer: "Client", phone: "Phone", shipment: "Shipment", status: "Status",
+    zone: "Zone", shelf: "Shelf", qty: "Qty", weight_kg: "Weight (kg)",
+    cbm: "Volume (CBM)", dims: "Box size", origin: "From", route: "Route",
+    age_days: "Days held", cost: "Charge (USD)", paid: "Paid",
+    pay_method: "Payment method", cny: "Amount (CNY)", declared: "Declared" };
+  const csv = [cols.map(c => csvCell(HEAD[c] || c)).join(",")]
+    .concat(rows.map(r => cols.map(c => csvCell(r[c])).join(",")))
+    .join("\n");
+  S.bulkBusy = false;
+  const name = "parcels-" + new Date().toISOString().slice(0, 10) + ".csv";
+  if (offerFile(name, csv)) toast(nf0.format(rows.length) + " rows exported", "ok");
+  else toast("The browser would not save the file.", "bad");
+  render();
 }
 
 /* ----------------------------------------------------------------- zones --- */
