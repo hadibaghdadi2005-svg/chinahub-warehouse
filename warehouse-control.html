@@ -1,4 +1,4 @@
-<title>ChinaHub Warehouse Control</title>
+<title>BAGHDEDI Warehouse System</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <style>
@@ -402,9 +402,9 @@ select.mini,input.mini{padding:6px 9px;border:1px solid var(--line);border-radiu
 <header class="top">
   <div class="top-in gut">
     <div class="brand">
-      <div class="mark">CH</div>
+      <div class="mark" id="mark">BW</div>
       <div class="brand-tx">
-        <b id="whName">ChinaHub Warehouse</b>
+        <b id="whName">BAGHDEDI Warehouse System</b>
         <span id="whSub">China → Lebanon · consolidation hub</span>
       </div>
     </div>
@@ -462,7 +462,7 @@ const TABS = [
   ["zones","Zones"], ["money","Money"], ["log","Log"], ["setup","Setup"],
 ];
 const DEFAULTS = {
-  whName:"ChinaHub Warehouse", whSub:"China → Lebanon · consolidation hub",
+  whName:"BAGHDEDI Warehouse System", whSub:"China → Lebanon · consolidation hub",
   currency:"USD", lbpRate:89500, freeDays:14, cnyPerUsd:7.1,
   rateMode:"cbm", ratePerCbm:260, ratePerKg:4.5, longStayDays:90,
   /* Freight costs a different amount per lane, so each one carries its own
@@ -480,7 +480,7 @@ const FEED_MAX = 200, HIST_MAX = 25, SCANFEED_MAX = 14;
 
 /* Bumped on every publish. Shown in Setup → Where this data lives, so a stale
    installed app window can be told from a current one without guessing. */
-const BUILD = "2026-10-30.32";
+const BUILD = "2026-10-31.33";
 
 /* ============================== state ============================== */
 
@@ -586,6 +586,17 @@ function hash(s){
   return (h>>>0).toString(36);
 }
 function normBc(s){ return String(s||"").trim().replace(/\s+/g," "); }
+
+/* The badge in the corner is the warehouse's initials, derived from its name so
+   that renaming it in Setup carries the badge along rather than leaving the old
+   letters sitting next to the new name. Two letters is what the 30px square
+   holds: the first letter of the first two words, or the first two letters of a
+   one-word name. */
+function initials(name){
+  const w = String(name||"").trim().split(/\s+/).filter(Boolean);
+  if(!w.length) return "WH";
+  return (w.length === 1 ? w[0].slice(0,2) : w.map(x => x[0]).join("").slice(0,2)).toUpperCase();
+}
 
 function toast(msg, kind, action){
   const box=$("#toasts"); if(!box) return;
@@ -928,8 +939,10 @@ function render(){
      money:vMoney, log:vLog, setup:vSetup }[S.tab] || vScan)(v);
   m.append(v);
   $("#fab").hidden = (S.tab === "scan");
-  $("#whName").textContent = S.cfg.whName || DEFAULTS.whName;
+  const whn = S.cfg.whName || DEFAULTS.whName;
+  $("#whName").textContent = whn;
   $("#whSub").textContent  = S.cfg.whSub  || DEFAULTS.whSub;
+  const mk = $("#mark"); if(mk) mk.textContent = initials(whn);
   const ids = new Set();
   S.feed.slice(0,40).forEach(e => e.by && ids.add(e.by));
   if(S.openId){ const it=S.items.get(S.openId); (it?.hist||[]).forEach(h=>h.by&&ids.add(h.by)); }
