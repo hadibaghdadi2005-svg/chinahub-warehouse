@@ -1035,8 +1035,7 @@ function stockTiles() {
       else if (k === "unpaid" || k === "late" || k === "long")
         S.filters = { ...f, paid: f.paid === k ? "" : k };
       else S.filters = { ...f, status: f.status === k ? "" : k };
-      S.page = 0;
-      loadStock();
+      applyFilters();
     };
     return b;
   };
@@ -1048,8 +1047,14 @@ function stockTiles() {
   }
   const f = S.filters;
   const n = x => nf0.format(Number(x) || 0);
+  /* When the view is narrowed, the big number is the narrowed one and the
+     line under it says what it came out of — otherwise 1,605 of 8,232 reads
+     like the warehouse lost seven thousand parcels. */
+  const narrowed = Number(s.total) !== Number(s.total_all);
   wrap.append(
-    tile("", "All parcels", n(s.total), null, !f.status && !f.paid),
+    tile("", "All parcels", n(s.total),
+      narrowed ? "of " + n(s.total_all) + " in the warehouse" : null,
+      !f.status && !f.paid),
     tile("expected", "On the way", n(s.expected), "still in transit", f.status === "expected"),
     tile("received", "In the warehouse", n(s.received), "not on a shelf", f.status === "received"),
     tile("shelved", "On shelves", n(s.shelved), "located", f.status === "shelved"),
@@ -1094,7 +1099,7 @@ function stockFilters() {
      "what is in it now", so picking from this list drops that. */
   zs.onchange = () => {
     S.filters = { ...S.filters, zone: zs.value, here: false };
-    S.page = 0; loadStock();
+    applyFilters();
   };
   bar.append(zs);
 
@@ -1115,13 +1120,13 @@ function stockFilters() {
     const clr = el("button", "btn", "Clear");
     clr.type = "button";
     clr.onclick = () => {
-      S.q = ""; S.filters = { status: "", zone: "", paid: "" }; S.page = 0; loadStock();
+      S.q = ""; S.filters = { status: "", zone: "", paid: "" }; applyFilters();
     };
     bar.append(clr);
   }
   bar.addEventListener("submit", ev => {
     ev.preventDefault();
-    S.q = q.value; S.page = 0; loadStock();
+    S.q = q.value; applyFilters();
   });
   return bar;
 }
@@ -1241,10 +1246,27 @@ async function loadStock() {
 }
 
 async function loadStats() {
-  const { data, error } = await S.sb.rpc("stock_summary");
+  const f = S.filters;
+  const { data, error } = await S.sb.rpc("stock_summary", {
+    p_search: S.q.trim() || null,
+    p_zone: f.zone || null,
+    p_client: f.client || null,
+    p_status: f.status || null,
+    p_paid: f.paid || null,
+    p_here: !!f.here,
+  });
   if (error) { toast("Could not count the stock — " + error.message, "bad"); return; }
   S.stats = (data && data[0]) || null;
   render();
+}
+
+/* A filter or a search changes both the list and every tile above it, so they
+   are asked for together. Turning a page changes neither, and asks for the
+   list alone. */
+function applyFilters() {
+  S.page = 0;
+  loadStats();
+  loadStock();
 }
 
 /* ----------------------------------------------------------------- zones --- */
@@ -1308,8 +1330,8 @@ function zoneCard(z) {
      the number just tapped. */
   b.onclick = () => {
     S.filters = { status: "", zone: z.code, paid: "", here: true };
-    S.q = ""; S.page = 0; S.tab = "stock";
-    loadStock();
+    S.q = ""; S.tab = "stock";
+    applyFilters();
   };
   return b;
 }
@@ -1475,8 +1497,8 @@ function customerRow(c) {
   sh.onclick = () => {
     S.q = "";
     S.filters = { status: "", zone: "", paid: "", client: c.client_id };
-    S.page = 0; S.tab = "stock";
-    loadStock();
+    S.tab = "stock";
+    applyFilters();
   };
   a.append(sh);
   li.append(a);

@@ -155,6 +155,14 @@ mod += `
 
   S.filters = { status:"shelved", zone:"C", paid:"long" };
   build("stock-filtered", () => vStock());
+  /* Narrowed to one client: the tiles must show that client's figures and say
+     what they are narrowed from. */
+  S.filters = { status:"", zone:"", paid:"", client:"1000001" };
+  S.stats = { ...summary, total_all:8232, total:1605,
+              expected:419, received:1184, shelved:2, released:0, delivered:0,
+              unpaid_count:1185, unpaid_amount:22579.10 };
+  build("stock-one-client", () => vStock());
+  S.stats = { ...summary, total_all:8232, total:8232 };
   /* what a tap on a zone card leaves behind */
   S.filters = { status:"", zone:"C", paid:"", here:true };
   build("stock-from-zone-card", () => vStock());
@@ -526,6 +534,35 @@ for (const col of searched)
   if (!stockSelect.split(",").includes(col)) {
     fail++; console.log("  FAIL  " + col + " is searched but never fetched, so a match is invisible");
   } else pass++;
+
+/* ------------------------------------------------------------ the tiles ---
+ * The tiles sit above the list and must describe it. They were counting the
+ * whole warehouse whatever was filtered, which no rendered view can reveal —
+ * so the call is checked for the filters it is supposed to carry, and every
+ * place that changes a filter is checked for refreshing them.
+ */
+const statsCall = (mod.match(/rpc\("stock_summary",\s*\{([\s\S]*?)\}\)/) || [])[1] || "";
+for (const p of ["p_search", "p_zone", "p_client", "p_status", "p_paid", "p_here"])
+  if (!statsCall.includes(p)) {
+    fail++; console.log("  FAIL  the tiles are counted without " + p);
+  } else pass++;
+
+/* Changing a filter has to refresh both; turning a page must not. */
+const applyBody = (mod.match(/function applyFilters\(\)\s*\{([\s\S]*?)\n\}/) || [])[1] || "";
+for (const call of ["loadStats()", "loadStock()"])
+  if (!applyBody.includes(call)) {
+    fail++; console.log("  FAIL  applyFilters does not call " + call);
+  } else pass++;
+/* Any filter change that still calls loadStock on its own leaves stale tiles. */
+const strays = [...mod.matchAll(/S\.filters = [^\n]*\n\s*(?:S\.page = 0;\s*)?loadStock\(\);/g)];
+if (strays.length) {
+  fail++;
+  console.log("  FAIL  " + strays.length + " filter change(s) reload the list but not the tiles");
+} else pass++;
+
+expect("stock-one-client", "of 8,232 in the warehouse");
+expect("stock-one-client", "1,605");
+expect("stock-one-client", "client 1000001");
 
 /* "This client's parcels" must be an exact filter, not a substring search:
    a short client number is also a substring of hundreds of barcodes. */
