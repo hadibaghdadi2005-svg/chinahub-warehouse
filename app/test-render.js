@@ -91,6 +91,8 @@ mod += `
     { code:"A", label:"Zone A", kind:"shelf", racks:10, levels:5, sort:1 },
     { code:"C", label:"Zone C", kind:"shelf", racks:22, levels:5, sort:3 },
     { code:"SHIP", label:"Shipping department", kind:"staging", sort:6 },
+    { code:"HAMRA", label:"Hamra office", kind:"branch", sort:10,
+      note:"Customers collect and pay here" },
   ];
   const rows = [
     { barcode:"YT7600000000001", name:"A long product name", customer:"Karim Nassif",
@@ -127,6 +129,14 @@ mod += `
   }
   S.mode = "shelve"; S.dest = { zone:"C", shelf:"C18-01-01" };
   build("scan-with-shelf", () => vScan());
+  /* sending parcels to the branch, and the same screen with no branch set up */
+  S.mode = "branch"; S.branchZone = "HAMRA";
+  build("scan-to-branch", () => vScan());
+  const keptZones = S.zones;
+  S.zones = keptZones.filter(z => z.kind !== "branch");
+  build("scan-to-branch-none", () => vScan());
+  S.zones = keptZones;
+  S.mode = "shelve";
   S.scanFeed = [
     { kind:"ok",   bc:"YT7600000000001", msg:"Shelved: a parcel → C18-01-01", t:Date.now() },
     { kind:"warn", bc:"110000000000001", msg:"already on a shelf", t:Date.now() },
@@ -140,7 +150,7 @@ mod += `
   // so the app never has to decide whether to draw it.
   const summary = {
     total:8232, expected:4625, received:1884, shelved:1600, released:63, delivered:60,
-    late_count:3475, long_count:1049, free_days:14, long_stay_days:90,
+    at_branch:0, late_count:3475, long_count:1049, free_days:14, long_stay_days:90,
     unpaid_count:2703, unpaid_amount:39344.95, long_owed:11503.55,
   };
   S.tab = "stock"; S.q = "pierre"; S.total = 2; S.page = 0;
@@ -257,6 +267,13 @@ mod += `
     events, names:{ u1:"Ali Nasser" } };
   build("drawer-scanner", () => vDrawer());
 
+  S.me = { id:"u2", name:"Office", role:"office", active:true };
+  S.drawer = { barcode:full.barcode, loading:false,
+    parcel:{ ...full, status:"at_branch", zone:"HAMRA", shelf:null,
+             branched_at:"2026-10-31T09:00:00Z" },
+    events, names:{ u1:"Ali Nasser" } };
+  build("drawer-at-branch", () => vDrawer());
+
   S.drawer = { barcode:full.barcode, loading:true, parcel:null, events:null, names:{} };
   build("drawer-loading", () => vDrawer());
   S.drawer = { barcode:full.barcode, loading:false, parcel:full, events:null, names:{} };
@@ -359,6 +376,12 @@ mod += `
   } catch (e) { out["bulk-deliver-dialog"] = { ok:false, err:e && e.message }; }
   document.body.children = [];
   try {
+    askBulkMove("at_branch");
+    out["bulk-branch-dialog"] = { ok:true,
+      text: document.body.children.map(c => c.textContent).join(" "), cls:"" };
+  } catch (e) { out["bulk-branch-dialog"] = { ok:false, err:e && e.message }; }
+  document.body.children = [];
+  try {
     askBulkPaid(true);
     out["bulk-paid-dialog"] = { ok:true,
       text: document.body.children.map(c => c.textContent).join(" "), cls:"" };
@@ -399,6 +422,9 @@ mod += `
       note:null, sort:3, parcels:489, locations_used:99 },
     { code:"SHIP", label:"Shipping department", kind:"staging", racks:null, levels:null,
       capacity:300, note:"Waiting to be put on shelves", sort:6, parcels:1884, locations_used:0 },
+    { code:"HAMRA", label:"Hamra office", kind:"branch", racks:null, levels:null,
+      capacity:0, note:"Customers collect and pay here", sort:10,
+      parcels:12, locations_used:0 },
   ];
   build("zones", () => vZones());
   S.zoneStats = null; build("zones-loading", () => vZones());
@@ -624,6 +650,19 @@ expect("import-blocked", "do not look like parcel numbers");
 expect("import-blocked", "Fix the Barcode column first");
 expect("import-blocked", "load it on the Scan tab instead");
 expect("import-right-column", '"distinct":3,"bad":0');
+
+/* The branch office, everywhere it has to appear. */
+expect("scan-to-branch", "Going to");
+expect("scan-to-branch", "Hamra office");
+expect("scan-to-branch-none", "No branch office set up yet");
+expect("bulk-branch-dialog", "Which branch");
+expect("bulk-branch-dialog", "This clears their shelf");
+expect("stock-one-selected", "→ Hamra office");
+expect("drawer-at-branch", "At a branch");
+expect("zones", "Hamra office");
+expect("zones", "Branch offices");
+expect("zone-dialogs", "Branch office");
+expect("bulk-paid-dialog", "Hamra office");
 
 expect("stock-one-selected", "1 selected");
 expect("stock-one-selected", "Mark paid");

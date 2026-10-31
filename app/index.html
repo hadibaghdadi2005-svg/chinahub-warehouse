@@ -148,6 +148,7 @@ select.inp{appearance:none;background-image:linear-gradient(45deg,transparent 49
 .chip.s-expected{background:color-mix(in srgb,var(--st-expected) 16%,transparent);color:var(--st-expected)}
 .chip.s-received{background:color-mix(in srgb,var(--st-received) 16%,transparent);color:var(--st-received)}
 .chip.s-shelved{background:color-mix(in srgb,var(--st-shelved) 16%,transparent);color:var(--st-shelved)}
+.chip.s-at_branch{background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--warn)}
 .chip.s-released{background:color-mix(in srgb,var(--st-released) 16%,transparent);color:var(--st-released)}
 .chip.s-delivered{background:color-mix(in srgb,var(--st-delivered) 16%,transparent);color:var(--st-delivered)}
 .banner{
@@ -337,8 +338,26 @@ const STATUS = {
   expected:  "On the way",
   received:  "In the warehouse",
   shelved:   "On a shelf",
+  at_branch: "At a branch",
   released:  "Out for delivery",
   delivered: "Delivered",
+};
+const ORDER = ["expected", "received", "shelved", "at_branch", "released", "delivered"];
+
+/* How money actually comes in. "Hamra office" is a place as much as a method,
+   which is the point: the office needs to know where a payment was taken, not
+   only that it was. */
+const PAY_METHODS = ["CASH", "Hamra office", "Cash on delivery paid",
+  "WhishPay", "MontyPay", "Balance Pay", "Cybersource"];
+
+/* A branch is somewhere that is not this warehouse — the Hamra office to
+   begin with. While there is only one, it is named everywhere rather than
+   called "a branch", because nobody in the warehouse says "a branch". */
+const branchZones = () => S.zones.filter(z => z.kind === "branch");
+const theBranch = () => (branchZones().length === 1 ? branchZones()[0] : null);
+const branchLabel = () => {
+  const b = theBranch();
+  return b ? (b.label || b.code) : "a branch";
 };
 
 /* What a scan does. `to` is the status it moves a parcel into; lookup moves
@@ -346,6 +365,7 @@ const STATUS = {
 const MODES = {
   receive: { label: "Receive", sub: "arrived at the hub",  to: "received",  verb: "Received" },
   shelve:  { label: "Put away", sub: "onto a shelf",       to: "shelved",   verb: "Shelved" },
+  branch:  { label: "To a branch", sub: "for collection",  to: "at_branch", verb: "Sent to" },
   release: { label: "Release", sub: "to a driver",         to: "released",  verb: "Released" },
   deliver: { label: "Deliver", sub: "to the customer",     to: "delivered", verb: "Delivered" },
   lookup:  { label: "Look up", sub: "changes nothing",     to: null,        verb: "Found" },
@@ -405,6 +425,7 @@ const S = {
   mode: "lookup",
   dest: { zone: "", shelf: "" },   /* where "put away" is currently filing to */
   recvZone: "SHIP",                /* where a receive scan lands */
+  branchZone: "",                  /* which branch a branch scan goes to */
   scanFeed: [],
   undo: null,                      /* the last move, so one misfire is cheap */
   beep: true,
@@ -799,6 +820,14 @@ async function handleScan(raw) {
       loc = { zone: S.dest.zone, shelf: S.dest.shelf };
     }
     if (S.mode === "receive") loc = { zone: S.recvZone || "", shelf: "" };
+    if (S.mode === "branch") {
+      const b = S.branchZone || (theBranch() && theBranch().code) || "";
+      if (!b) {
+        ping(false); feedPush("bad", bc, "No branch office is set up — add one in Setup");
+        return;
+      }
+      loc = { zone: b, shelf: "" };
+    }
     if (S.mode === "release" || S.mode === "deliver") loc = { shelf: "" };
 
     try {
@@ -904,6 +933,32 @@ function vScan() {
     d.append(r);
     d.append(el("div", "li-s", "Scan a shelf label to change it. Every parcel scanned after " +
       "that goes to this shelf until you scan another."));
+    v.append(d);
+  }
+  if (S.mode === "branch") {
+    const bz = branchZones();
+    const d = el("div", "card pad");
+    d.style.marginBottom = "12px";
+    if (!bz.length) {
+      d.append(banner("bad", "No branch office set up yet",
+        "Add a zone in Setup and set its type to “Branch office”."));
+    } else {
+      const r = el("div", "row");
+      r.append(el("span", "li-s", "Going to"));
+      const sel = el("select", "inp sm");
+      sel.style.width = "auto"; sel.style.minHeight = "34px";
+      for (const z of bz) {
+        const o = el("option", null, z.label || z.code);
+        o.value = z.code;
+        if ((S.branchZone || (theBranch() && theBranch().code)) === z.code) o.selected = true;
+        sel.append(o);
+      }
+      sel.onchange = () => { S.branchZone = sel.value; render(); focusScan(); };
+      r.append(sel);
+      d.append(r);
+      d.append(el("div", "sub2", "These leave the warehouse but are not delivered yet — " +
+        "the customer collects them there. Mark them delivered when they do."));
+    }
     v.append(d);
   }
   if (S.mode === "receive") {
@@ -1117,6 +1172,8 @@ function stockTiles() {
     tile("expected", "On the way", n(s.expected), "still in transit", f.status === "expected"),
     tile("received", "In the warehouse", n(s.received), "not on a shelf", f.status === "received"),
     tile("shelved", "On shelves", n(s.shelved), "located", f.status === "shelved"),
+    tile("at_branch", "At " + branchLabel(), n(s.at_branch), "waiting to be collected",
+      f.status === "at_branch"),
     tile("released", "Out for delivery", n(s.released), "with a driver", f.status === "released"),
     tile("delivered", "Delivered", n(s.delivered), "handed over", f.status === "delivered"),
     tile("late", "Over free days", n(s.late_count), "past " + s.free_days + " days", f.paid === "late"),
@@ -1437,6 +1494,7 @@ function bulkBar() {
   }
   act("→ In the warehouse", () => askBulkMove("received"));
   act("→ On a shelf", () => askBulkMove("shelved"));
+  act("→ " + branchLabel(), () => askBulkMove("at_branch"));
   act("→ Out for delivery", () => askBulkMove("released"));
   act("→ Delivered", () => askBulkMove("delivered"));
   act("Export", exportSelection);
@@ -1460,6 +1518,26 @@ function askBulkMove(to) {
   m.append(err);
 
   let zoneSel = null, shelfInp = null;
+  if (to === "at_branch") {
+    const bz = branchZones();
+    if (!bz.length) {
+      m.append(banner("bad", "No branch office set up yet",
+        "Add a zone in Setup and set its type to “Branch office”."));
+    } else {
+      const w = el("label", "field");
+      w.append(el("span", null, "Which branch"));
+      zoneSel = el("select", "inp");
+      for (const z of bz) {
+        const o = el("option", null, z.label || z.code);
+        o.value = z.code;
+        zoneSel.append(o);
+      }
+      w.append(zoneSel);
+      w.append(el("div", "sub2", "They leave the warehouse but are not delivered — " +
+        "mark them delivered when the customer collects."));
+      m.append(w);
+    }
+  }
   if (to === "shelved") {
     const zw = el("label", "field");
     zw.append(el("span", null, "Zone"));
@@ -1485,7 +1563,7 @@ function askBulkMove(to) {
       "a shelf label sets this for you."));
     m.append(sw);
   }
-  if (to === "released" || to === "delivered")
+  if (to === "at_branch" || to === "released" || to === "delivered")
     m.append(banner(null, "This clears their shelf",
       "A parcel out with a driver is not on a shelf any more."));
   if (n > 200)
@@ -1503,6 +1581,11 @@ function askBulkMove(to) {
 
   m.addEventListener("submit", async ev => {
     ev.preventDefault();
+    if (to === "at_branch" && !zoneSel) {
+      err.replaceChildren(banner("bad", "Nowhere to send them",
+        "Set up a branch office in Setup first."));
+      return;
+    }
     const shelf = shelfInp ? shelfInp.value.trim().toUpperCase() : "";
     if (shelf) {
       const bad = shelfOutOfRange(shelf);
@@ -1537,8 +1620,7 @@ function askBulkPaid(paid) {
     const f = el("label", "field");
     f.append(el("span", null, "How did they pay?"));
     sel = el("select", "inp");
-    for (const o of ["CASH", "Cash on delivery paid", "WhishPay", "MontyPay",
-                     "Balance Pay", "Cybersource"]) {
+    for (const o of PAY_METHODS) {
       const x = el("option", null, o);
       x.value = o;
       sel.append(x);
@@ -1673,11 +1755,13 @@ function vZones() {
     return v;
   }
 
-  for (const kind of ["shelf", "staging"]) {
+  for (const kind of ["shelf", "staging", "branch"]) {
     const zs = S.zoneStats.filter(z => z.kind === kind);
     if (!zs.length) continue;
     const hr = el("div", "hr-t");
-    hr.append(el("span", "sect-t", kind === "shelf" ? "Shelf zones"
+    hr.append(el("span", "sect-t",
+      kind === "shelf" ? "Shelf zones"
+      : kind === "branch" ? "Branch offices — not this warehouse"
       : "Staging areas — in the warehouse, not on shelves"));
     v.append(hr);
     const g = el("div", "zgrid");
@@ -1694,7 +1778,10 @@ function zoneCard(z) {
   t.append(el("span", "zn", z.label || z.code));
   b.append(t);
   b.append(el("div", "zv", nf0.format(Number(z.parcels) || 0)));
-  b.append(el("div", "sub2", z.kind === "shelf" ? "parcels on these shelves" : "parcels in this area"));
+  b.append(el("div", "sub2",
+    z.kind === "shelf" ? "parcels on these shelves"
+    : z.kind === "branch" ? "parcels waiting to be collected"
+    : "parcels in this area"));
 
   const racks = Number(z.racks) || 0, levels = Number(z.levels) || 0;
   const slots = racks * levels, used = Number(z.locations_used) || 0;
@@ -1955,8 +2042,7 @@ function askPayment(c) {
   const f = el("label", "field");
   f.append(el("span", null, "How did they pay?"));
   const sel = el("select", "inp");
-  for (const opt of ["CASH", "Cash on delivery paid", "WhishPay", "MontyPay",
-                     "Balance Pay", "Cybersource"]) {
+  for (const opt of PAY_METHODS) {
     const o = el("option", null, opt);
     o.value = opt;
     sel.append(o);
@@ -2202,7 +2288,7 @@ function vDrawer() {
   mh.append(el("span", "sect-t", "Move it"));
   body.append(mh);
   const mg = el("div", "row");
-  for (const s of ["expected", "received", "shelved", "released", "delivered"]) {
+  for (const s of ORDER) {
     if (s === p.status) continue;
     const b = el("button", "btn sm", "→ " + (STATUS[s] || s));
     b.onclick = () => moveFromDrawer(p, s);
@@ -2312,7 +2398,9 @@ function fmtWhen(iso) {
 }
 
 async function moveFromDrawer(p, to) {
-  const loc = (to === "released" || to === "delivered") ? { shelf: "" }
+  const loc = to === "at_branch"
+                ? { shelf: "", zone: (theBranch() && theBranch().code) || p.zone }
+            : (to === "released" || to === "delivered") ? { shelf: "" }
             : to === "expected" ? { shelf: "", zone: "" } : null;
   try {
     await moveParcel(p, to, loc, "changed from the parcel screen");
@@ -2770,6 +2858,7 @@ function zonesSection() {
     nm.append(el("span", "zc", z.code));
     nm.append(el("span", null, z.label || z.code));
     if (z.kind === "staging") nm.append(el("span", "chip", "staging"));
+    if (z.kind === "branch") nm.append(el("span", "chip admin", "branch office"));
     m.append(nm);
     const bits = [];
     if (z.kind === "shelf" && z.racks && z.levels)
@@ -2831,7 +2920,8 @@ function askZone(z) {
   kw.append(el("span", null, "Type"));
   const ks = el("select", "inp");
   for (const [val, lab] of [["shelf", "Shelf zone — parcels get a shelf code"],
-                            ["staging", "Staging area — inside the warehouse, no shelves"]]) {
+                            ["staging", "Staging area — inside the warehouse, no shelves"],
+                            ["branch", "Branch office — not this warehouse; customers collect there"]]) {
     const o = el("option", null, lab);
     o.value = val;
     if ((z ? z.kind : "shelf") === val) o.selected = true;
@@ -3160,6 +3250,7 @@ const normStatus = s => {
   if (/release|out for|driver/.test(k)) return "released";
   if (/shelf|shelved|stored/.test(k)) return "shelved";
   if (/transit|on the way|expect|pending/.test(k)) return "expected";
+  if (/branch|hamra|office|collect/.test(k)) return "at_branch";
   if (/receiv|arriv|warehouse/.test(k)) return "received";
   return "";
 };

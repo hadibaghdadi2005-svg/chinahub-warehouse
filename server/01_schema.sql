@@ -80,11 +80,15 @@ create table parcels (
   received_at  timestamptz,
   shelved_at   timestamptz,
   released_at  timestamptz,
+  branched_at  timestamptz,          -- when it went to a branch office
   delivered_at timestamptz,
   updated_at   timestamptz not null default now(),
   updated_by   uuid references auth.users,
+  -- at_branch: left this warehouse for a branch office, where the customer
+  -- collects it. Not delivered — saying so early would record a handover that
+  -- has not happened.
   constraint parcels_status_known
-    check (status in ('expected','received','shelved','released','delivered'))
+    check (status in ('expected','received','shelved','at_branch','released','delivered'))
 );
 
 create index parcels_status_idx   on parcels (status);
@@ -94,6 +98,7 @@ create index parcels_client_idx   on parcels (client_id);
 create index parcels_shipment_idx on parcels (shipment);
 create index parcels_unpaid_idx   on parcels (paid)      where paid = false;
 create index parcels_shipped_idx  on parcels (shipped_at);
+create index parcels_branch_idx   on parcels (zone)      where status = 'at_branch';
 
 -- free text across the fields people actually search by
 create index parcels_search_idx on parcels using gin (

@@ -159,7 +159,7 @@ grant select (
   status, zone, shelf, qty, weight_kg, cbm, dims,
   origin, route, notes,
   inbound_at, shipped_at, received_at, shelved_at, released_at, delivered_at,
-  updated_at, updated_by
+  branched_at, updated_at, updated_by
 ) on parcels to authenticated;
 
 create or replace view parcels_view
@@ -176,7 +176,10 @@ select
   case when sees_money() then currency   end as currency,
   case when sees_money() then paid       end as paid,
   case when sees_money() then paid_at    end as paid_at,
-  case when sees_money() then pay_method end as pay_method
+  case when sees_money() then pay_method end as pay_method,
+  -- how long it has been in play, so the stock list can sort and filter on it
+  parcel_age_days(shipped_at, received_at) as age_days,
+  branched_at
 from parcels
 where my_role() is not null;
 
