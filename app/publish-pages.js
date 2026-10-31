@@ -35,6 +35,21 @@ try {
 
   for (const f of FILES) fs.copyFileSync(path.join(__dirname, f), path.join(work, f));
 
+  /* Stamp the build. Both of these have to change on every publish: the page
+     so anyone can say which version they are looking at, and the worker
+     because a browser that sees identical bytes keeps the old one — and with
+     it the old app. The local copies keep saying "dev". */
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").slice(2, 13);
+  const bump = (f, from, to) => {
+    const p = path.join(work, f);
+    const before = fs.readFileSync(p, "utf8");
+    const after = before.replace(from, to);
+    if (before === after) throw new Error("could not stamp the build into " + f);
+    fs.writeFileSync(p, after);
+  };
+  bump("index.html", 'const BUILD = "dev";', 'const BUILD = "' + stamp + '";');
+  bump("sw.js", '"chinahub-dev"', '"chinahub-' + stamp + '"');
+
   /* Stage first, then ask. On Windows a copied file can look modified to
      `git status` purely from line endings and come out identical once git has
      normalised it, so the only honest check is against what is staged.

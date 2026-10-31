@@ -6,7 +6,10 @@
  * in. Warehouse records change by the minute and are answered per signed-in
  * person, so a stale or someone else's copy would be worse than no answer.
  */
-const VERSION = "chinahub-v1";
+/* Stamped by publish-pages.js. It has to change on every publish, or the
+   browser sees identical bytes, keeps the old worker, and the old cache with
+   it. */
+const VERSION = "chinahub-dev";
 const SHELL = [
   "./",
   "./index.html",
@@ -56,7 +59,10 @@ self.addEventListener("fetch", e => {
   if (req.mode === "navigate") {
     e.respondWith((async () => {
       try {
-        const fresh = await fetch(req);
+        /* `cache: "reload"` goes past the browser's own HTTP cache. Without
+           it, GitHub Pages' ten-minute max-age can serve yesterday's app to
+           someone who has just been told the fix is live. */
+        const fresh = await fetch(req, { cache: "reload" });
         const c = await caches.open(VERSION);
         c.put("./index.html", fresh.clone());
         return fresh;

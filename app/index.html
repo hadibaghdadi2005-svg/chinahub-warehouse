@@ -311,6 +311,11 @@ import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 const SUPABASE_URL = "https://llarspjcyvqzylxjxlld.supabase.co";
 const SUPABASE_KEY = "sb_publishable_OKETaCQWF5_VvMj2Wa3cMw_jpOA3DBa";
 
+/* Stamped by publish-pages.js on the way out. Shown on the sign-in card and
+   in Setup, so "which version am I actually running" has an answer — without
+   one, a fixed bug and a cached copy look exactly the same. */
+const BUILD = "dev";
+
 const ROLES = {
   scanner: { label: "Scanner", blurb: "Shelves and looks up parcels. Never sees a charge." },
   office:  { label: "Office",  blurb: "Prices parcels and takes payment." },
@@ -472,6 +477,9 @@ function vSignIn() {
   go.type = "submit";
 
   card.append(f1, f2, go);
+  const ver = el("div", "sub2", "version " + BUILD);
+  ver.style.cssText = "margin-top:14px;text-align:center";
+  card.append(ver);
 
   card.addEventListener("submit", async ev => {
     ev.preventDefault();
@@ -2159,6 +2167,20 @@ function vSetup() {
 
   v.append(zonesSection());
   v.append(importSection());
+
+  const foot = el("div", "sub2");
+  foot.style.cssText = "margin-top:18px;text-align:center";
+  foot.append(document.createTextNode("Running version " + BUILD + ". "));
+  const again = el("button", "btn sm", "Check for a new one");
+  again.onclick = async () => {
+    try {
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (reg) await reg.update();
+      toast("Checked. If a new version was waiting it will offer to reload.", "ok");
+    } catch (_) { toast("Could not check — reload the page instead.", "bad"); }
+  };
+  foot.append(again);
+  v.append(foot);
   return v;
 }
 
@@ -3384,8 +3406,39 @@ boot().catch(e => {
   $("#app").replaceChildren(banner("bad", "The app could not start", String(e && e.message || e)));
 });
 
-if ("serviceWorker" in navigator)
-  addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+/* Keeping the app up to date.
+ *
+ * A page left open all day never reloads, and GitHub Pages lets a browser hold
+ * index.html for ten minutes, so a published fix can sit there unseen. The
+ * worker is asked to check on every start and whenever the app is brought back
+ * to the front; when a new one takes over, the page says so and offers to
+ * reload rather than changing under someone mid-scan. */
+if ("serviceWorker" in navigator) {
+  addEventListener("load", async () => {
+    try {
+      const reg = await navigator.serviceWorker.register("sw.js");
+      reg.update().catch(() => {});
+      addEventListener("visibilitychange", () => {
+        if (!document.hidden) reg.update().catch(() => {});
+      });
+    } catch (_) {}
+  });
+
+  let reloading = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (reloading) return;
+    reloading = true;
+    const t = el("div", "toast ok");
+    t.append(document.createTextNode("A new version is ready "));
+    const b = el("button", "btn sm", "Reload");
+    b.style.marginLeft = "8px";
+    b.onclick = () => location.reload();
+    t.append(b);
+    const box = $("#toasts");
+    if (box) box.append(t);
+    else location.reload();
+  });
+}
 </script>
 </body>
 </html>
