@@ -396,6 +396,7 @@ const S = {
   imp: null,           /* the file being brought in: headers, rows, mapping */
   impBusy: false, impChecking: false, impRunning: false,
   impDone: 0, impPreview: null, impResult: null, impError: "",
+  scanRunning: false, scanDone: 0, scanResult: null,
   laneCover: null,     /* how many parcels each lane would take */
   coverBusy: false,
 
@@ -980,8 +981,46 @@ function vScan() {
     }
     v.append(list);
   }
+
+  /* Loading the day's scan file belongs here, with the scanning — not behind
+     Setup, which the people who actually walk the floor cannot open. */
+  v.append(scanFileDrop());
   setTimeout(focusScan, 0);
   return v;
+}
+
+function scanFileDrop() {
+  if (S.imp && S.imp.kind === "scan") return scanSection();
+  const card = el("div", "card pad");
+  card.style.marginTop = "18px";
+  const hr = el("div", "hr-t");
+  hr.append(el("span", "sect-t", "Load a scan from the PDA"));
+  card.append(hr);
+  card.append(el("div", "sub2", "The file the shelf scanner exports — barcode, " +
+    "shelf, scanned at. Every parcel in it goes onto the shelf it was scanned on."));
+  const row = el("div", "row");
+  row.style.marginTop = "9px";
+  const pick = el("input");
+  pick.type = "file";
+  pick.accept = ".csv,.tsv,text/csv";
+  pick.className = "inp";
+  pick.onchange = () => { if (pick.files && pick.files[0]) readImportFile(pick.files[0]); };
+  row.append(pick);
+  card.append(row);
+  if (S.impBusy) {
+    const b = el("div", "sub2");
+    b.style.marginTop = "8px";
+    b.append(el("span", "spin"));
+    b.append(document.createTextNode(" reading the file…"));
+    card.append(b);
+  }
+  if (S.impError) card.append(banner("bad", "Could not read that file", S.impError));
+  /* A dashboard export is office work and has its own screen. */
+  if (S.imp && S.imp.kind === "export")
+    card.append(banner("warn", "That looks like a dashboard export, not a floor scan",
+      sees_money() ? "Bring it in from Setup instead, where the columns can be matched up."
+                   : "Ask the office to bring that one in."));
+  return card;
 }
 
 /* ----------------------------------------------------------------- stock --- */
@@ -3221,6 +3260,172 @@ function buildImportRows() {
   return { rows, noBarcode, dupes, emptyCols };
 }
 
+/* ------------------------------------------------------- a floor scan ----- */
+/* The PDA writes `barcode, shelf, scanned at`, and that file is the opposite
+   of a dashboard export: it is the only thing that actually knows where a
+   parcel is, because somebody stood in front of the shelf and read both
+   labels. So it takes a different path — one that does set the shelf, and
+   sets the status with it. A parcel the dashboard still calls "on the way" is
+   plainly not on the way if it is sitting on C20-01-05. */
+
+const isScanFile = headers => {
+  const k = headers.map(hkey);
+  return k.includes("barcode") && k.includes("shelf") &&
+    (k.includes("scannedat") || k.includes("scanned") || k.includes("time"));
+};
+
+/* Every distinct shelf in the file, with what is wrong with it if anything. */
+function scanShelves(rows) {
+  const by = new Map();
+  for (const r of rows) {
+    if (!by.has(r.shelf)) by.set(r.shelf, { shelf: r.shelf, n: 0, zone: "", why: "" });
+    by.get(r.shelf).n++;
+  }
+  for (const s of by.values()) {
+    const asZone = S.zones.find(z => z.code.toUpperCase() === s.shelf);
+    if (asZone) { s.zone = asZone.code; continue; }
+    const bad = shelfOutOfRange(s.shelf);
+    if (bad) { s.why = bad; continue; }
+    s.zone = zoneForShelf(s.shelf);
+    if (!s.zone) s.why = "does not start with any zone you have";
+  }
+  return [...by.values()].sort((a, b) => a.shelf.localeCompare(b.shelf));
+}
+
+function buildScanRows() {
+  const { headers, data } = S.imp;
+  const k = headers.map(hkey);
+  const iBc = k.indexOf("barcode");
+  const iSh = k.indexOf("shelf");
+  const iAt = k.findIndex(x => x === "scannedat" || x === "scanned" || x === "time");
+  const rows = [];
+  let blank = 0;
+  for (const r of data) {
+    const barcode = normBc(r[iBc] == null ? "" : String(r[iBc]));
+    const shelf = String(r[iSh] == null ? "" : r[iSh]).trim().toUpperCase();
+    if (!barcode || !shelf) { blank++; continue; }
+    const at = iAt >= 0 ? String(r[iAt] || "").trim() : "";
+    const when = at && !isNaN(Date.parse(at)) ? new Date(at).toISOString() : null;
+    rows.push({ barcode, shelf, zone: zoneForShelf(shelf) || null, at: when });
+  }
+  return { rows, blank };
+}
+
+function scanSection() {
+  const card = el("div", "card pad");
+  card.style.marginTop = "18px";
+  const hr = el("div", "hr-t");
+  hr.append(el("span", "sect-t", "A floor scan"));
+  card.append(hr);
+
+  const imp = S.imp;
+  const { rows, blank } = buildScanRows();
+  const shelves = scanShelves(rows);
+  const bad = shelves.filter(s => s.why);
+  const badRows = bad.reduce((n, s) => n + s.n, 0);
+  const good = rows.length - badRows;
+
+  card.append(banner(null, imp.fileName,
+    nf0.format(rows.length) + " scans across " + nf0.format(shelves.length) +
+    " shelves" + (blank ? ", " + nf0.format(blank) + " blank rows ignored" : "") + "."));
+
+  card.append(el("div", "sub2",
+    "This is your own scan, so it is believed: every parcel here is put on the shelf " +
+    "it was scanned on and marked as being on a shelf — including the ones the " +
+    "dashboard still thinks are on their way. A parcel scanned twice takes its " +
+    "last reading."));
+
+  if (bad.length) {
+    const b = banner("warn",
+      nf0.format(bad.length) + " shelf label" + (bad.length === 1 ? "" : "s") +
+      " did not read — " + nf0.format(badRows) + " parcel" + (badRows === 1 ? "" : "s"),
+      "These are skipped. The scan order usually recovers them: a parcel between " +
+      "two good labels is on the shelf between them. Fix the physical label too.");
+    card.append(b);
+    const list = el("div", "list");
+    for (const s of bad) {
+      const li = el("div", "li");
+      const m = el("div", "li-m");
+      const nm = el("div", "li-nm");
+      nm.append(el("span", "mono", s.shelf));
+      nm.append(el("span", "chip off", nf0.format(s.n) + " parcels"));
+      m.append(nm);
+      m.append(el("div", "li-s", s.why));
+      li.append(m);
+      list.append(li);
+    }
+    card.append(list);
+  }
+
+  if (S.scanResult) {
+    const r = S.scanResult;
+    card.append(banner("ok", "Done",
+      nf0.format(r.shelved) + " put on their shelves" +
+      (r.unchanged ? ", " + nf0.format(r.unchanged) + " already there" : "") +
+      (r.unknown_count ? ", " + nf0.format(r.unknown_count) + " not in the system" : "") + "."));
+    if (r.unknown_count) {
+      card.append(el("div", "sub2",
+        "On your shelves but unknown to the warehouse — either the dashboard is " +
+        "behind, or it has lost them:"));
+      const u = el("div", "mono sub2");
+      u.style.cssText = "margin-top:6px;overflow-wrap:anywhere";
+      u.textContent = (r.unknown_codes || []).join("  ");
+      card.append(u);
+      const dl = el("button", "btn sm", "Save that list");
+      dl.type = "button";
+      dl.onclick = () => offerFile("not-in-system-" + new Date().toISOString().slice(0, 10) + ".csv",
+        "barcode\n" + (r.unknown_codes || []).join("\n"));
+      const w = el("div", "row");
+      w.style.marginTop = "8px";
+      w.append(dl);
+      card.append(w);
+    }
+  }
+
+  const acts = el("div", "row");
+  acts.style.marginTop = "12px";
+  const go = el("button", "btn pri", S.scanRunning
+    ? "Shelving… " + nf0.format(S.scanDone || 0)
+    : "Put " + nf0.format(good) + " parcel" + (good === 1 ? "" : "s") + " on their shelves");
+  go.type = "button";
+  go.disabled = !good || !!S.scanRunning;
+  go.onclick = () => runScanFile(rows.filter(r => !bad.some(b => b.shelf === r.shelf)));
+  acts.append(go);
+  const cancel = el("button", "btn", "Cancel");
+  cancel.type = "button";
+  cancel.disabled = !!S.scanRunning;
+  cancel.onclick = () => { S.imp = null; S.scanResult = null; render(); };
+  acts.append(cancel);
+  card.append(acts);
+  return card;
+}
+
+async function runScanFile(rows) {
+  S.scanRunning = true; S.scanDone = 0; S.scanResult = null; render();
+  let shelved = 0, unchanged = 0, unknown = [];
+  try {
+    for (let i = 0; i < rows.length; i += 500) {
+      const chunk = rows.slice(i, i + 500);
+      const { data, error } = await S.sb.rpc("shelve_from_scan", { p_rows: chunk });
+      if (error) throw error;
+      const r = (data && data[0]) || {};
+      shelved += Number(r.shelved) || 0;
+      unchanged += Number(r.unchanged) || 0;
+      unknown = unknown.concat(r.unknown_codes || []);
+      S.scanDone = Math.min(i + chunk.length, rows.length);
+      render();
+    }
+    S.scanResult = { shelved, unchanged, unknown_count: unknown.length, unknown_codes: unknown };
+    toast(nf0.format(shelved) + " put on their shelves", "ok");
+    S.rows = null; S.stats = null; S.zoneStats = null;
+  } catch (e) {
+    toast("Stopped after " + nf0.format(S.scanDone) + " — " +
+      ((e && e.message) || "something went wrong"), "bad");
+  }
+  S.scanRunning = false;
+  render();
+}
+
 /* ------------------------------------------------------------ the card --- */
 function importSection() {
   const card = el("div", "card pad");
@@ -3230,14 +3435,19 @@ function importSection() {
   card.append(hr);
   const p = el("div", "sub2");
   p.style.margin = "8px 0 12px";
-  p.textContent = "Export from the ChinaHub dashboard and drop the file here. " +
-    "Excel (.xlsx) and CSV are both read; the first sheet is used. A barcode already " +
-    "here is refreshed, a new one is added.";
+  p.textContent = "Two kinds of file go here and the app tells them apart. " +
+    "A dashboard export (.xlsx or CSV) refreshes what is known about each parcel " +
+    "and adds any that are new, without ever moving one off its shelf. " +
+    "A floor scan from the PDA — barcode, shelf, scanned at — does the opposite: " +
+    "it puts parcels on the shelves they were scanned on.";
   card.append(p);
 
   if (!isAdmin() && !sees_money()) return card;
 
   const imp = S.imp;
+  /* A scan from the floor is a different thing entirely and gets its own
+     screen, rather than being squeezed through the column mapping. */
+  if (imp && imp.kind === "scan") return scanSection();
   if (!imp) {
     const row = el("div", "row");
     const pick = el("input");
@@ -3393,11 +3603,15 @@ async function readImportFile(file) {
     rows = rows.filter(r => r && r.some(c => String(c == null ? "" : c).trim() !== ""));
     if (rows.length < 2) throw new Error("There is no data under the header row.");
     const headers = rows[0].map(h => String(h == null ? "" : h).trim());
+    const scan = isScanFile(headers);
     S.imp = {
       fileName: file.name, headers, data: rows.slice(1),
-      map: guessMap(headers), status: "received", zone: "",
+      kind: scan ? "scan" : "export",
+      map: scan ? {} : guessMap(headers), status: "received", zone: "",
     };
     S.impPreview = null;
+    S.scanResult = null;
+    if (scan) { S.impBusy = false; render(); return; }
   } catch (e) {
     S.impError = (e && e.message) || String(e);
     S.imp = null;
