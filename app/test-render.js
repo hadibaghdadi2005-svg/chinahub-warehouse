@@ -305,6 +305,41 @@ mod += `
   } catch (e) { out["delete-dialog"] = { ok:false, err:e && e.message }; }
   S.drawer = null;
 
+  // shipping — the other business line, office and admin only
+  S.tab = "shipping";
+  S.me = { id:"u2", name:"Office", role:"office", active:true };
+  S.shipStats = {
+    total_all:46, shipments:46, sea:19, air:27,
+    billed:8257.14, collected:567.85, outstanding:7689.29,
+    unpaid_count:43, undelivered:42, clients:31, containers:23,
+  };
+  S.shipQ = ""; S.shipFilters = { mode:"", paid:"" };
+  S.ships = [
+    { ship_num:3420, code:"SALAM-SAMI KHOURY", client:"SAMI KHOURY", mode:"sea",
+      container:"C-031", boxes:1, goods:null, weight_kg:0, volume_cbm:0.0554,
+      price:450, total:24.93, paid_amount:0,
+      raised_at:"2026-10-31", arrived_at:"2026-10-31", delivered_at:null, paid_at:null },
+    { ship_num:3409, code:"SALAM-NADA SALEM", client:"NADA SALEM", mode:"air",
+      container:"A-098", boxes:33, goods:"UTENSILS", weight_kg:3.8, volume_cbm:0,
+      price:10.5, total:39.9, paid_amount:39.9,
+      raised_at:"2026-10-29", arrived_at:"2026-10-29",
+      delivered_at:"2026-10-30", paid_at:"2026-10-30" },
+  ];
+  build("shipping", () => vShipping());
+  S.shipFilters = { mode:"sea", paid:"unpaid" };
+  build("shipping-filtered", () => vShipping());
+  S.shipFilters = { mode:"", paid:"" };
+  S.ships = []; build("shipping-none", () => vShipping());
+  S.ships = null; build("shipping-loading", () => vShipping());
+  S.shipStats = null; build("shipping-adding-up", () => vShipping());
+
+  // a scanner must not be offered it at all
+  S.me = { id:"u1", name:"Ali Nasser", role:"scanner", active:true };
+  out["tabs-scanner-shipping"] = { ok:true,
+    text: visibleTabs().map(t => t.label).join(" "), cls:"" };
+  S.me = { id:"u2", name:"Office", role:"office", active:true };
+  S.ships = null; S.shipStats = null;
+
   // setup — office may look, only an admin may change
   S.tab = "setup";
   S.cfg = {
@@ -650,6 +685,24 @@ expect("import-blocked", "do not look like parcel numbers");
 expect("import-blocked", "Fix the Barcode column first");
 expect("import-blocked", "load it on the Scan tab instead");
 expect("import-right-column", '"distinct":3,"bad":0');
+
+/* The shipping line: its own figures, and never a scanner's business. */
+expect("shipping", "By sea");
+expect("shipping", "By air");
+expect("shipping", "charged per CBM");
+expect("shipping", "charged per kilo");
+expect("shipping", "$7,689.29");
+expect("shipping", "SAMI KHOURY");
+expect("shipping", "C-031");
+expect("shipping", "0.055 CBM × $450.00/CBM");
+expect("shipping", "3.8 kg × $10.50/kg");
+expect("shipping", "Mark paid");
+expect("shipping", "not delivered");
+expect("shipping-filtered", "Clear");
+expect("shipping-none", "Nothing matches");
+if (/Shipping/.test((out["tabs-scanner-shipping"] || {}).text || "")) {
+  fail++; console.log("  FAIL  a scanner is offered the Shipping tab");
+} else pass++;
 
 /* The branch office, everywhere it has to appear. */
 expect("scan-to-branch", "Going to");

@@ -417,6 +417,11 @@ const S = {
   impBusy: false, impChecking: false, impRunning: false,
   impDone: 0, impPreview: null, impResult: null, impError: "",
   scanRunning: false, scanDone: 0, scanResult: null,
+
+  /* shipping — the other business line */
+  ships: null, shipStats: null, shipQ: "",
+  shipFilters: { mode: "", paid: "" },
+  shipRunning: false, shipDone: 0, shipResult: null,
   laneCover: null,     /* how many parcels each lane would take */
   coverBusy: false,
 
@@ -608,6 +613,10 @@ function shell(view) {
         if (!S.customers) loadCustomers();
       }
       if (t.id === "setup" && !S.cfg) loadCfg();
+      if (t.id === "shipping") {
+        if (!S.ships) loadShipments();
+        if (!S.shipStats) loadShipStats();
+      }
     };
     tabs.append(b);
   }
@@ -628,6 +637,9 @@ function visibleTabs() {
   /* A scanner is not shown Money, and would get nothing from it anyway: every
      function behind it refuses them. */
   if (sees_money()) t.push({ id: "money", label: "Money" });
+  /* The shipping line is commercial work; a scanner has no part in it, and
+     every function behind it refuses them anyway. */
+  if (sees_money()) t.push({ id: "shipping", label: "Shipping" });
   /* Office may read the rates — they are behind every charge — but only an
      admin may change them, which the screen itself makes plain. */
   if (sees_money()) t.push({ id: "setup", label: "Setup" });
@@ -2539,6 +2551,391 @@ function askDeleteParcel(p) {
   document.body.append(scrim);
 }
 
+/* -------------------------------------------------------------- shipping --- */
+/* The other business line: clients who have their own suppliers and only ship
+   with us. Their goods are consignments in containers, not parcels on
+   shelves, and the price per kilo or per CBM is set by the shipping
+   department in its own system — nothing here works one out. The app's job is
+   to hold what that system exported, show who owes what, and record delivery
+   and payment. */
+
+const isShippingFile = headers => {
+  const k = headers.map(hkey);
+  return k.includes("shipnum") && (k.includes("shipcode") || k.includes("shipsr"));
+};
+
+/* Excel keeps a date as days since 30 December 1899. This sheet also uses 1
+   and 0 as "not set", which must not become 1900. */
+function excelDate(v) {
+  const n = parseFloat(String(v == null ? "" : v).replace(/[^\d.eE+-]/g, ""));
+  if (!isFinite(n) || n < 10000) return null;
+  return new Date(Date.UTC(1899, 11, 30) + n * 86400000).toISOString().slice(0, 10);
+}
+
+function buildShipmentRows() {
+  const { headers, data } = S.imp;
+  const k = headers.map(hkey);
+  const at = name => k.indexOf(hkey(name));
+  const num = v => {
+    const n = parseFloat(String(v == null ? "" : v).replace(/[^\d.eE+-]/g, ""));
+    return isFinite(n) ? n : 0;
+  };
+  const txt = v => {
+    const s = String(v == null ? "" : v).trim();
+    return s === "" || s === "0" ? null : s;
+  };
+
+  const col = {
+    ship_num: at("ship_num"), code: at("ship_code"),
+    client: at("compute_0019"), mode: at("compute_0020"),
+    freight: at("ship_freight_type"), container: at("ship_container_code"),
+    boxes: at("ship_boxes_code"), goods: at("ship_goods_type"),
+    weight: at("ship_real_weight"), volume: at("ship_real_volume"),
+    price: at("ship_real_kilo_price"), fallbackPrice: at("ship_kilo_price"),
+    total: at("ship_real_final_tot"), paidAmt: at("ship_payment_amt"),
+    raised: at("ship_date"), arrived: at("ship_arrival_date"),
+    delivered: at("ship_delivery_date"), paidAt: at("ship_payment_date"),
+    to: at("ship_delv_location"), note: at("ship_note"),
+  };
+
+  const rows = [];
+  let noNumber = 0, odd = [];
+  for (const r of data) {
+    const cell = i => (i >= 0 ? r[i] : undefined);
+    const shipNum = Math.round(num(cell(col.ship_num)));
+    if (!shipNum) { noNumber++; continue; }
+
+    const code = txt(cell(col.code));
+    /* The sheet usually carries the bare client name in its own column; where
+       it does not, it is the part of the code after the agent. */
+    let client = txt(cell(col.client));
+    if (!client && code) client = code.split("-").slice(1).join("-").trim() || code;
+
+    let mode = String(cell(col.mode) || "").trim().toLowerCase();
+    if (mode !== "sea" && mode !== "air")
+      mode = String(cell(col.freight) || "").trim() === "1" ? "sea" : "air";
+
+    const weight = num(cell(col.weight));
+    const volume = num(cell(col.volume));
+    const price = num(cell(col.price)) || num(cell(col.fallbackPrice));
+    const total = num(cell(col.total));
+
+    /* Sea is charged on volume, air on weight. Saying so where the sheet does
+       not add up means a wrong price is seen rather than quietly billed. */
+    const expect = mode === "sea" ? +(volume * price).toFixed(2) : +(weight * price).toFixed(2);
+    if (total && price && Math.abs(expect - total) > 0.05)
+      odd.push({ ship_num: shipNum, client, mode, expect, total });
+
+    rows.push({
+      ship_num: shipNum, code, client, mode,
+      container: txt(cell(col.container)),
+      boxes: Math.round(num(cell(col.boxes))),
+      goods: txt(cell(col.goods)),
+      weight_kg: weight, volume_cbm: volume, price, total,
+      paid_amount: num(cell(col.paidAmt)),
+      raised_at: excelDate(cell(col.raised)),
+      arrived_at: excelDate(cell(col.arrived)),
+      delivered_at: excelDate(cell(col.delivered)),
+      paid_at: excelDate(cell(col.paidAt)),
+      delivery_to: txt(cell(col.to)),
+      note: txt(cell(col.note)),
+    });
+  }
+  return { rows, noNumber, odd };
+}
+
+function shippingImportSection() {
+  const card = el("div", "card pad");
+  card.style.marginTop = "18px";
+  const hr = el("div", "hr-t");
+  hr.append(el("span", "sect-t", "A shipping export"));
+  card.append(hr);
+
+  const { rows, noNumber, odd } = buildShipmentRows();
+  const sea = rows.filter(r => r.mode === "sea").length;
+  const billed = rows.reduce((s, r) => s + (Number(r.total) || 0), 0);
+
+  card.append(banner(null, S.imp.fileName,
+    nf0.format(rows.length) + " shipments — " + nf0.format(sea) + " by sea, " +
+    nf0.format(rows.length - sea) + " by air, " + money(billed) + " billed" +
+    (noNumber ? ", " + nf0.format(noNumber) + " rows with no shipment number skipped" : "") + "."));
+
+  card.append(el("div", "sub2",
+    "Matched on the shipping system's own number, so bringing the same export " +
+    "in again refreshes rather than duplicates. Prices come from that system — " +
+    "nothing here works one out."));
+
+  /* A total that does not match its own price and weight is worth seeing
+     before it becomes an invoice. */
+  if (odd.length) {
+    card.append(banner("warn",
+      nf0.format(odd.length) + " do not match their own price",
+      "Sea is charged on volume and air on weight. These come out differently:"));
+    const list = el("div", "list");
+    for (const o of odd.slice(0, 8)) {
+      const li = el("div", "li");
+      const m = el("div", "li-m");
+      const nm = el("div", "li-nm");
+      nm.append(el("span", "mono", String(o.ship_num)));
+      nm.append(el("span", "chip " + (o.mode === "sea" ? "office" : "scanner"), o.mode));
+      m.append(nm);
+      m.append(el("div", "li-s", (o.client || "—") + " · the sheet says " +
+        money(o.total) + ", the price works out to " + money(o.expect)));
+      li.append(m);
+      list.append(li);
+    }
+    card.append(list);
+  }
+
+  const acts = el("div", "row");
+  acts.style.marginTop = "12px";
+  const go = el("button", "btn pri", S.shipRunning
+    ? "Bringing them in… " + nf0.format(S.shipDone || 0)
+    : "Bring in " + nf0.format(rows.length) + " shipments");
+  go.type = "button";
+  go.disabled = !rows.length || !!S.shipRunning;
+  go.onclick = () => runShipmentImport(rows);
+  acts.append(go);
+  const cancel = el("button", "btn", "Cancel");
+  cancel.type = "button";
+  cancel.disabled = !!S.shipRunning;
+  cancel.onclick = () => { S.imp = null; S.shipResult = null; render(); };
+  acts.append(cancel);
+  card.append(acts);
+
+  if (S.shipResult)
+    card.append(banner("ok", "Done", nf0.format(S.shipResult.inserted) + " added, " +
+      nf0.format(S.shipResult.updated) + " refreshed."));
+  return card;
+}
+
+async function runShipmentImport(rows) {
+  S.shipRunning = true; S.shipDone = 0; S.shipResult = null; render();
+  let inserted = 0, updated = 0;
+  try {
+    for (let i = 0; i < rows.length; i += 300) {
+      const chunk = rows.slice(i, i + 300);
+      const { data, error } = await S.sb.rpc("import_shipments", { p_rows: chunk });
+      if (error) throw error;
+      const r = (data && data[0]) || {};
+      inserted += Number(r.inserted) || 0;
+      updated += Number(r.updated) || 0;
+      S.shipDone = Math.min(i + chunk.length, rows.length);
+      render();
+    }
+    S.shipResult = { inserted, updated };
+    S.imp = null;
+    S.ships = null; S.shipStats = null;
+    toast(nf0.format(inserted) + " added, " + nf0.format(updated) + " refreshed", "ok");
+  } catch (e) {
+    toast("Stopped after " + nf0.format(S.shipDone) + " — " +
+      ((e && e.message) || "something went wrong"), "bad");
+  }
+  S.shipRunning = false;
+  render();
+}
+
+/* ------------------------------------------------------------ the screen --- */
+function vShipping() {
+  const v = el("section");
+  const head = el("div", "vhead");
+  const h = el("div");
+  h.append(el("h2", null, "Shipping"));
+  h.append(el("div", "sub", "Clients who ship with us but buy from their own suppliers. " +
+    "Priced by the shipping department, per CBM by sea and per kilo by air."));
+  head.append(h);
+  v.append(head);
+
+  const s = S.shipStats;
+  const tiles = el("div", "tiles");
+  const tile = (k, label, val, note, on, colour) => {
+    const b = el("button", "tile" + (on ? " on" : ""));
+    b.append(el("div", "k", label));
+    const vv = el("div", "v", val);
+    if (colour) vv.style.color = colour;
+    b.append(vv);
+    if (note) b.append(el("div", "n", note));
+    b.onclick = () => {
+      const f = S.shipFilters;
+      if (!k) S.shipFilters = { mode: "", paid: "" };
+      else if (k === "sea" || k === "air")
+        S.shipFilters = { ...f, mode: f.mode === k ? "" : k };
+      else S.shipFilters = { ...f, paid: f.paid === k ? "" : k };
+      loadShipments(); loadShipStats();
+    };
+    return b;
+  };
+  if (!s) {
+    const b = el("div", "tile");
+    b.append(el("div", "k", "Adding up"), el("div", "v", "…"));
+    tiles.append(b);
+  } else {
+    const f = S.shipFilters;
+    const n = x => nf0.format(Number(x) || 0);
+    const narrowed = Number(s.shipments) !== Number(s.total_all);
+    tiles.append(
+      tile("", "Shipments", n(s.shipments),
+        narrowed ? "of " + n(s.total_all) + " in all" : n(s.clients) + " clients · " +
+          n(s.containers) + " containers", !f.mode && !f.paid),
+      tile("sea", "By sea", n(s.sea), "charged per CBM", f.mode === "sea"),
+      tile("air", "By air", n(s.air), "charged per kilo", f.mode === "air"),
+      tile("unpaid", "Outstanding", money(s.outstanding), n(s.unpaid_count) + " unpaid",
+        f.paid === "unpaid", "var(--danger)"),
+      tile("", "Collected", money(s.collected), "of " + money(s.billed) + " billed", false,
+        "var(--ok)"),
+      tile("undelivered", "Not delivered", n(s.undelivered), "still to go out",
+        f.paid === "undelivered"),
+    );
+  }
+  v.append(tiles);
+
+  /* search */
+  const bar = el("form", "row");
+  bar.style.marginBottom = "14px";
+  const q = el("input", "inp");
+  q.placeholder = "Client, container or shipment number…";
+  q.value = S.shipQ;
+  q.autocomplete = "off";
+  q.style.flex = "1 1 240px";
+  bar.append(q);
+  const go = el("button", "btn pri", "Search");
+  go.type = "submit";
+  bar.append(go);
+  if (S.shipQ.trim() || S.shipFilters.mode || S.shipFilters.paid) {
+    const clr = el("button", "btn", "Clear");
+    clr.type = "button";
+    clr.onclick = () => {
+      S.shipQ = ""; S.shipFilters = { mode: "", paid: "" };
+      loadShipments(); loadShipStats();
+    };
+    bar.append(clr);
+  }
+  bar.addEventListener("submit", ev => {
+    ev.preventDefault();
+    S.shipQ = q.value;
+    loadShipments(); loadShipStats();
+  });
+  v.append(bar);
+
+  if (!S.ships) {
+    const e = el("div", "empty");
+    e.append(el("span", "spin"));
+    e.append(el("div", null, "Loading shipments…"));
+    v.append(e);
+    return v;
+  }
+  if (!S.ships.length) {
+    const e = el("div", "empty");
+    e.append(el("b", null, s && Number(s.total_all) ? "Nothing matches" : "No shipments yet"));
+    e.append(document.createTextNode(s && Number(s.total_all)
+      ? "Clear the filter, or search for something else."
+      : "Bring the shipping department's export in from Setup."));
+    v.append(e);
+    return v;
+  }
+
+  const list = el("div", "list");
+  for (const r of S.ships) list.append(shipmentRow(r));
+  v.append(list);
+  return v;
+}
+
+function shipmentRow(r) {
+  const li = el("div", "li");
+  const m = el("div", "li-m");
+  const nm = el("div", "li-nm");
+  nm.append(el("span", null, r.client || r.code || "—"));
+  nm.append(el("span", "chip " + (r.mode === "sea" ? "office" : "scanner"),
+    r.mode === "sea" ? "Sea" : "Air"));
+  if (r.container) nm.append(el("span", "chip", r.container));
+  if (!r.delivered_at) nm.append(el("span", "chip s-received", "not delivered"));
+  m.append(nm);
+
+  const bits = ["#" + r.ship_num];
+  const qty = r.mode === "sea"
+    ? nf3.format(Number(r.volume_cbm) || 0) + " CBM"
+    : nf3.format(Number(r.weight_kg) || 0) + " kg";
+  bits.push(qty + " × " + money(r.price) + (r.mode === "sea" ? "/CBM" : "/kg"));
+  if (Number(r.boxes)) bits.push(nf0.format(r.boxes) + " boxes");
+  if (r.goods) bits.push(r.goods);
+  if (r.raised_at) bits.push("raised " + fmtDate(r.raised_at));
+  m.append(el("div", "li-s", bits.join("  ·  ")));
+  li.append(m);
+
+  const a = el("div", "li-a");
+  const total = Number(r.total) || 0, paid = Number(r.paid_amount) || 0;
+  const owed = +(total - paid).toFixed(2);
+  const t = el("span", "mono num", money(total));
+  t.style.fontWeight = "700";
+  a.append(t);
+  if (r.paid_at && owed <= 0) {
+    a.append(el("span", "chip s-delivered", "Paid"));
+  } else {
+    const o = el("span", "chip off", money(owed) + " due");
+    a.append(o);
+    const b = el("button", "btn sm pri", "Mark paid");
+    b.onclick = () => markShipment(r, { paid: true });
+    a.append(b);
+  }
+  if (!r.delivered_at) {
+    const d = el("button", "btn sm", "Delivered");
+    d.onclick = () => markShipment(r, { delivered: true });
+    a.append(d);
+  } else {
+    a.append(el("span", "li-s", "delivered " + fmtDate(r.delivered_at)));
+  }
+  li.append(a);
+  return li;
+}
+
+async function markShipment(r, what) {
+  const today = new Date().toISOString().slice(0, 10);
+  const patch = {};
+  if (what.paid) { patch.paid_at = today; patch.paid_amount = Number(r.total) || 0; }
+  if (what.delivered) patch.delivered_at = today;
+  const { data, error } = await S.sb.from("shipments")
+    .update(patch).eq("ship_num", r.ship_num).select("ship_num");
+  if (error) { toast(error.message, "bad"); return; }
+  if (!data || !data.length) { toast("Nothing changed — the office handles this.", "bad"); return; }
+  toast(what.paid ? "Marked paid · " + money(r.total) : "Marked delivered", "ok");
+  loadShipments(); loadShipStats();
+}
+
+async function loadShipments() {
+  S.ships = null; render();
+  const f = S.shipFilters;
+  let qy = S.sb.from("shipments").select(
+    "ship_num,code,client,mode,container,boxes,goods,weight_kg,volume_cbm," +
+    "price,total,paid_amount,raised_at,arrived_at,delivered_at,paid_at,delivery_to");
+  if (f.mode) qy = qy.eq("mode", f.mode);
+  if (f.paid === "unpaid") qy = qy.is("paid_at", null);
+  if (f.paid === "paid") qy = qy.not("paid_at", "is", null);
+  if (f.paid === "undelivered") qy = qy.is("delivered_at", null);
+  const term = S.shipQ.trim();
+  if (term) {
+    const like = "%" + term.replace(/[%,()]/g, " ") + "%";
+    qy = qy.or(["client.ilike." + like, "code.ilike." + like,
+                "container.ilike." + like].join(","));
+  }
+  const { data, error } = await qy.order("raised_at", { ascending: false })
+    .order("ship_num", { ascending: false }).limit(300);
+  if (error) { toast(error.message, "bad"); S.ships = []; render(); return; }
+  S.ships = data || [];
+  render();
+}
+
+async function loadShipStats() {
+  const f = S.shipFilters;
+  const { data, error } = await S.sb.rpc("shipment_summary", {
+    p_search: S.shipQ.trim() || null,
+    p_mode: f.mode || null,
+    p_paid: f.paid || null,
+  });
+  if (error) { toast("Could not add up the shipping — " + error.message, "bad"); return; }
+  S.shipStats = (data && data[0]) || null;
+  render();
+}
+
 /* ----------------------------------------------------------------- setup --- */
 /* Rates, storage rules and the floor plan. Office may look — the figures are
    the ones behind every charge, and hiding them from the people taking money
@@ -3550,6 +3947,7 @@ function importSection() {
   /* A scan from the floor is a different thing entirely and gets its own
      screen, rather than being squeezed through the column mapping. */
   if (imp && imp.kind === "scan") return scanSection();
+  if (imp && imp.kind === "shipping") return shippingImportSection();
   if (!imp) {
     const row = el("div", "row");
     const pick = el("input");
@@ -3728,14 +4126,15 @@ async function readImportFile(file) {
     if (rows.length < 2) throw new Error("There is no data under the header row.");
     const headers = rows[0].map(h => String(h == null ? "" : h).trim());
     const scan = isScanFile(headers);
+    const shipping = !scan && isShippingFile(headers);
     S.imp = {
       fileName: file.name, headers, data: rows.slice(1),
-      kind: scan ? "scan" : "export",
-      map: scan ? {} : guessMap(headers), status: "received", zone: "",
+      kind: scan ? "scan" : shipping ? "shipping" : "export",
+      map: (scan || shipping) ? {} : guessMap(headers), status: "received", zone: "",
     };
     S.impPreview = null;
     S.scanResult = null;
-    if (scan) { S.impBusy = false; render(); return; }
+    if (scan || shipping) { S.impBusy = false; render(); return; }
   } catch (e) {
     S.impError = (e && e.message) || String(e);
     S.imp = null;
@@ -4057,6 +4456,7 @@ function render() {
   if (!S.me) { app.replaceChildren(vNoAccess()); return; }
   const view = S.tab === "staff" && isAdmin() ? vStaff()
              : S.tab === "setup" && sees_money() ? vSetup()
+             : S.tab === "shipping" && sees_money() ? vShipping()
              : S.tab === "money" && sees_money() ? vMoney()
              : S.tab === "stock" ? vStock()
              : S.tab === "zones" ? vZones()
@@ -4100,6 +4500,8 @@ async function boot() {
       S.money = null; S.cfg = null; S.customers = null;
       S.custSearch = ""; S.custPage = 0; S.custTotal = 0;
       S.cfgDraft = null; S.laneCover = null;
+      S.ships = null; S.shipStats = null; S.shipQ = "";
+      S.shipFilters = { mode: "", paid: "" };
       if (S.session) await loadMe();
       render();
       if (S.me) { loadZones(); loadStats(); }
