@@ -136,3 +136,46 @@ upload side. The bucket and its files were removed again.
 
 Whatever hosts this needs to be a plain static host that serves `text/html`:
 GitHub Pages, Cloudflare Pages, Netlify and the like all do.
+
+## 2 November 2026 — the received export changed two things, not 3,409
+
+`Orders_20261102210603_ySLTQV.xlsx`, 3,429 lines: 3,409 parcels and 20
+continuation lines carrying a second item name for the parcel above them.
+Every one of the 3,409 was already in the database, and every figure matched
+to the cent — 6,341.521 kg, 91,317 pieces, ￥286,593.67, $46,982.73, 765
+clients. Running it through `import_parcels` would have inserted nothing and
+rewritten each row with what it already held.
+
+Comparing 3,409 codes against 8,232 without shipping either list: the local
+`server/data/parcels.csv` holds the same barcodes as the live table — checked
+by grouping both on `substr(md5(barcode),1,1)` and hashing each group's codes
+in byte order, 16 of 16 identical. The export is then a subset of a list that
+exists on both sides, so it travels as one bit per row in barcode order, 1 KB
+of base64 instead of 58 KB of codes, and `get_bit` turns it back into a join.
+Worth remembering next time a file has to be matched against the table.
+
+Two real differences, both applied as Hadi so the guard and `updated_by`
+behave as they would from the app, each parcel getting a `parcel_events` line:
+
+- **29 payments**, $212.84 across 13 clients, all "Cash on delivery paid"
+  between 30 Oct and 2 Nov. 25 of them are on shelves. Paid 2,803 → 2,832.
+- **81 parcels** the app still had on the way while this received list
+  accounted for them. Advanced to `received`; on the way 4,302 → 4,221, in
+  the warehouse 1,835 → 1,916.
+
+Both statements only touch a row still in the old state — unpaid, or
+`expected` — so a second run changes nothing, and nothing moves backwards.
+Shelves were untouched throughout: 1,818 parcels on 300 shelves before and
+after, no `shelved` parcel left without one.
+
+`import_parcels` will not do that second step itself. It leaves status, zone
+and shelf alone on any parcel it already knows, which is what stops a weekly
+import undoing a floor scan — but it also means it cannot tell a step forward
+from a knock-back, so a received export never advances what the app still has
+in transit. Making it advance `expected` → `received` only, and never the
+reverse, is a small change and has not been made.
+
+Dates out of these exports carry no timezone and the app reads them as Beirut
+local; checked against a parcel already loaded (file 20:34:42, stored
+17:34:42Z, so UTC+3 in October). The 29 payment dates were read the same way
+rather than as China time, to keep one convention across all 8,232 rows.
