@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>ChinaHub Warehouse</title>
-<meta name="description" content="Sign-in and staff control for the ChinaHub consolidation warehouse.">
+<title>BAGHDEDI Warehouse System</title>
+<meta name="description" content="Sign-in and staff control for the BAGHDEDI consolidation warehouse.">
 <meta name="theme-color" content="#0b5c5e">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
@@ -329,6 +329,23 @@ const SUPABASE_KEY = "sb_publishable_OKETaCQWF5_VvMj2Wa3cMw_jpOA3DBa";
    one, a fixed bug and a cached copy look exactly the same. */
 const BUILD = "dev";
 
+/* The name has to be here as well as in the database, because the sign-in
+   screen, the browser tab and the installed app all need it before anyone has
+   signed in to read a setting. Once signed in, the stored name wins, so a
+   rename in Setup shows everywhere inside the app without waiting for this
+   file to be published again. */
+const BRAND = "BAGHDEDI Warehouse System";
+const BRAND_SUB = "China → Lebanon · consolidation hub";
+
+/* The corner badge, from whatever the warehouse is called — so a rename never
+   strands old initials beside a new name. */
+const initials = name => String(name || BRAND)
+  .split(/\s+/).filter(Boolean).slice(0, 2)
+  .map(w => w[0].toUpperCase()).join("") || "W";
+
+const whName = () => (S.brand && S.brand.name) || BRAND;
+const whSub = () => (S.brand && S.brand.subtitle) || BRAND_SUB;
+
 const ROLES = {
   scanner: { label: "Scanner", blurb: "Shelves and looks up parcels. Never sees a charge." },
   office:  { label: "Office",  blurb: "Prices parcels and takes payment." },
@@ -402,6 +419,7 @@ const S = {
   custTotal: 0,
 
   /* setup */
+  brand: null,         /* what the warehouse is called, per the database */
   cfgDraft: null,      /* edits in progress; nothing is written until Save */
   cfgSaving: false,
   drawer: null,        /* the parcel currently open over everything */
@@ -481,10 +499,10 @@ function banner(kind, title, body) {
 
 function logo() {
   const w = el("div", "logo");
-  const m = el("div", "logo-m", "CH");
+  const m = el("div", "logo-m", initials(BRAND));
   const t = el("div");
-  t.append(el("div", "logo-t", "ChinaHub Warehouse"));
-  t.append(el("div", "logo-s", "China → Lebanon · consolidation hub"));
+  t.append(el("div", "logo-t", BRAND));
+  t.append(el("div", "logo-s", BRAND_SUB));
   w.append(m, t);
   return w;
 }
@@ -582,9 +600,9 @@ function shell(view) {
   const top = el("header", "top");
   const inr = el("div", "top-in gut");
   const brand = el("div", "brand");
-  brand.append(el("div", "logo-m", "CH"));
+  brand.append(el("div", "logo-m", initials(whName())));
   const bt = el("div", "brand-tx");
-  bt.append(el("div", "logo-t", "ChinaHub Warehouse"));
+  bt.append(el("div", "logo-t", whName()));
   bt.append(el("div", "logo-s", S.me.name));
   brand.append(bt);
 
@@ -2945,7 +2963,7 @@ async function loadShipStats() {
    button. */
 
 const DEFAULT_CFG = {
-  whName: "ChinaHub Warehouse", whSub: "China → Lebanon · consolidation hub",
+  whName: BRAND, whSub: BRAND_SUB,
   currency: "USD", lbpRate: 89500, freeDays: 14, cnyPerUsd: 6.1,
   rateMode: "cbm", ratePerCbm: 450, ratePerKg: 14.5, longStayDays: 90,
   lanes: [],
@@ -3229,6 +3247,7 @@ async function saveCfg() {
   }
   S.cfg = data[0].data;
   S.cfgDraft = null;
+  loadBrand();                     /* the header follows the rename at once */
   S.stats = null; S.money = null;   /* free days and the rate feed those */
   toast("Settings saved", "ok");
   render();
@@ -4276,6 +4295,16 @@ function staffRow(p) {
   return li;
 }
 
+/* The name alone, which every member of staff may read — unlike the rates
+   it sits beside. */
+async function loadBrand() {
+  const { data, error } = await S.sb.rpc("warehouse_name");
+  if (error) return;
+  S.brand = (data && data[0]) || null;
+  if (S.brand && S.brand.name) document.title = S.brand.name;
+  render();
+}
+
 async function loadZones() {
   const { data, error } = await S.sb.from("zones")
     .select("code,label,kind,racks,levels,capacity,note,sort").order("sort");
@@ -4486,7 +4515,7 @@ async function boot() {
   S.session = data.session || null;
   if (S.session) await loadMe();
   render();
-  if (S.me) { loadZones(); loadStats(); }
+  if (S.me) { loadBrand(); loadZones(); loadStats(); }
   if (isAdmin()) loadStaff();
 
   S.sb.auth.onAuthStateChange(async (evt, session) => {
@@ -4500,11 +4529,12 @@ async function boot() {
       S.money = null; S.cfg = null; S.customers = null;
       S.custSearch = ""; S.custPage = 0; S.custTotal = 0;
       S.cfgDraft = null; S.laneCover = null;
+      S.brand = null;
       S.ships = null; S.shipStats = null; S.shipQ = "";
       S.shipFilters = { mode: "", paid: "" };
       if (S.session) await loadMe();
       render();
-      if (S.me) { loadZones(); loadStats(); }
+      if (S.me) { loadBrand(); loadZones(); loadStats(); }
       if (isAdmin()) loadStaff();
     }
   });

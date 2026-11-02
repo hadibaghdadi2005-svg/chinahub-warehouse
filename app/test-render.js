@@ -505,6 +505,9 @@ const expect = (name, needle) => {
   } else pass++;
 };
 expect("signIn", "Sign in");
+/* The name, in the one place that cannot read it from the database. */
+expect("signIn", "BAGHDEDI Warehouse System");
+expect("signIn", "BW");
 expect("noAccess", "cannot see the warehouse");
 expect("scan-lookup", "changes nothing");
 expect("scan-shelve", "onto a shelf");

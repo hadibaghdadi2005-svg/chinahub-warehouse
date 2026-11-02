@@ -1,7 +1,7 @@
 {
-  "name": "ChinaHub Warehouse",
-  "short_name": "ChinaHub",
-  "description": "Shelf, lookup and staff control for the ChinaHub consolidation warehouse.",
+  "name": "BAGHDEDI Warehouse System",
+  "short_name": "BAGHDEDI",
+  "description": "Shelf, lookup, shipping and staff control for the BAGHDEDI consolidation warehouse.",
   "start_url": ".",
   "scope": ".",
   "display": "standalone",
@@ -9,8 +9,21 @@
   "background_color": "#f3f6f5",
   "theme_color": "#0b5c5e",
   "icons": [
-    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
-    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
   ]
 }
