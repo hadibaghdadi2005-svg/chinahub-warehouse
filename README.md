@@ -284,7 +284,7 @@ Not software, and not done:
 
 - **1,854 shelf locations** in `shelf-worksheet.csv` never loaded.
 - **480 parcels** left China more than 90 days ago and are still in transit.
-- **1,884 parcels** with no location, 1,184 of them on account `1000001`.
+- **1,884 parcels** with no location, 1,184 of them on one account.
 - **16 parcels** on the two shelf labels that would not read.
 - **4 + 7 picking misses** — shipped on paper, still on the shelf.
 - **18 parcels with no charge at all**, 17 of them on client `65`.

@@ -56,9 +56,9 @@ routes, origins, payment methods and clients, and the earliest and latest
 shipping date. All thirty-three agree.
 
 One apparent mismatch was the comparison's fault, not the migration's: the
-local check treated a phone number of `"0"` as empty. Two parcels
-(`DPK300000000001`, `SF5100000000001`) really do carry `"0"` as their phone in
-ChinaHub's data. The database's 8,205 is the right answer.
+local check treated a phone number of `"0"` as empty. Two parcels really do
+carry `"0"` as their phone in ChinaHub's data. The database's 8,205 is the
+right answer.
 
 Aggregates can agree while individual rows are wrong, so every field of every
 row was then checksummed on both sides — one pipe-separated line per row,
