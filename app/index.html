@@ -3802,8 +3802,10 @@ function vWaseet() {
     render();
   };
   selBar.append(allCb);
-  selBar.append(el("span", "li-s", S.waseetSel.size
-    ? S.waseetSel.size + " selected"
+  const selOrders = new Set();
+  for (const r of rows) if (S.waseetSel.has(r.barcode)) selOrders.add(r.client_id || r.barcode);
+  selBar.append(el("span", "li-s", selOrders.size
+    ? selOrders.size + " orders selected (" + S.waseetSel.size + " parcels)"
     : "Select all"));
   if (S.waseetSel.size) {
     const delBtn = el("button", "btn sm", "Remove selected");
