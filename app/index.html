@@ -76,6 +76,14 @@ button{cursor:pointer}
 .lbl-tab{padding:7px 14px;border-radius:var(--r-sm);font-size:13.5px;font-weight:600;background:var(--surface-2);border:1px solid var(--line);color:var(--fg-dim)}
 .lbl-tab.on{background:var(--primary);border-color:var(--primary);color:var(--primary-fg)}
 .lbl-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+.lbl-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px;padding:10px 14px;background:var(--surface-2);border-radius:var(--r-sm);border:1px solid var(--line)}
+.lbl-toolbar button{padding:7px 14px;border-radius:var(--r-sm);font-size:13px;font-weight:600;border:1px solid var(--line);background:var(--surface);color:var(--fg-dim);cursor:pointer}
+.lbl-toolbar button.primary{background:var(--primary);border-color:var(--primary);color:var(--primary-fg)}
+.lbl-toolbar button:disabled{opacity:.4;cursor:not-allowed}
+.lbl-toolbar .lbl-count{font-size:13px;color:var(--fg-dim);margin-left:auto}
+.lbl-sel{position:absolute;top:10px;left:10px;width:24px;height:24px;accent-color:var(--primary);cursor:pointer}
+.lbl-card.lbl-card-a5{position:relative}
+.lbl-card-a5.lbl-unsel{opacity:.35}
 .lbl-grid.lbl-a5{grid-template-columns:1fr;gap:24px;max-width:600px;margin:0 auto}
 .lbl-card{background:var(--surface);border:2px dashed var(--line);border-radius:var(--r);padding:16px;page-break-inside:avoid;break-inside:avoid}
 .lbl-card.lbl-card-a5{padding:32px 28px;min-height:400px;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center}
@@ -105,6 +113,9 @@ button{cursor:pointer}
   .lbl-card-a5 .lbl-name{font-size:32px;color:#000}
   .lbl-card-a5 .lbl-info{font-size:18px;color:#555}
   .lbl-card-a5 .lbl-cut{font-size:14px;color:#999;border-color:#ccc}
+  .lbl-card-a5.lbl-unsel{display:none!important}
+  .lbl-sel{display:none!important}
+  .lbl-toolbar{display:none!important}
   .lbl-code,.lbl-name{color:#000}
   .lbl-info{color:#555}
   .lbl-cut{color:#999;border-color:#ccc}
@@ -462,6 +473,7 @@ const S = {
   /* labels */
   labelTab: "zones",
   labelShips: null,
+  selectedZones: new Set(),
 
   /* setup */
   brand: null,         /* what the warehouse is called, per the database */
@@ -2049,10 +2061,29 @@ function vLabelZones() {
     f.append(e);
     return f;
   }
+  const toolbar = el("div", "lbl-toolbar");
+  const selAll = el("button", null, "Select All");
+  selAll.onclick = () => { S.zones.forEach(z => S.selectedZones.add(z.code)); render(); };
+  const selNone = el("button", null, "Clear");
+  selNone.onclick = () => { S.selectedZones.clear(); render(); };
+  const printBtn = el("button", "primary", "Print Selected");
+  printBtn.disabled = S.selectedZones.size === 0;
+  printBtn.onclick = () => window.print();
+  const count = el("span", "lbl-count", S.selectedZones.size + " of " + S.zones.length + " selected");
+  toolbar.append(selAll, selNone, printBtn, count);
+  f.append(toolbar);
+
   const g = el("div", "lbl-grid lbl-a5");
   const fg = getComputedStyle(document.documentElement).getPropertyValue("--fg").trim() || "#141e1d";
   for (const z of S.zones) {
-    const card = el("div", "lbl-card lbl-card-a5");
+    const sel = S.selectedZones.has(z.code);
+    const card = el("div", "lbl-card lbl-card-a5" + (S.selectedZones.size > 0 && !sel ? " lbl-unsel" : ""));
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.className = "lbl-sel";
+    cb.checked = sel;
+    cb.onchange = () => { if (cb.checked) S.selectedZones.add(z.code); else S.selectedZones.delete(z.code); render(); };
+    card.append(cb);
     const top = el("div", "lbl-top");
     top.append(el("span", "lbl-code", z.code));
     const kindChip = el("span", "lbl-chip");
