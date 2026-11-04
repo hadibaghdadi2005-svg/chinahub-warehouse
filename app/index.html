@@ -2186,7 +2186,6 @@ function vLabelShipments() {
       d.append(el("span", "lbl-detail-val", val || "—"));
       details.append(d);
     }
-    addDetail("Phone", s.phone || "—");
     addDetail("Cartons", s.boxes != null ? String(s.boxes) : "—");
     addDetail("Received", s.arrived_at || "—");
     if (s.mode === "sea") {
