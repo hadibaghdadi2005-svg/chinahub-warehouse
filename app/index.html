@@ -2624,6 +2624,39 @@ function rateForMonth(dateStr) {
   return Number(S.cfg && S.cfg.cnyPerUsd) || 0;
 }
 
+async function recalcAllCosts() {
+  if (!confirm("Recalculate all parcel costs using monthly rates? This may take a moment.")) return;
+  const rates = S.monthlyRates || {};
+  if (!Object.keys(rates).length) { toast("No monthly rates set.", "bad"); return; }
+  const fallback = Number(S.cfg && S.cfg.cnyPerUsd) || 0;
+  const { data, error } = await S.sb.from("parcels")
+    .select("barcode,cny,shipped_at")
+    .gt("cny", 0)
+    .not("shipped_at", "is", null);
+  if (error) { toast(error.message, "bad"); return; }
+  if (!data || !data.length) { toast("No parcels with CNY to recalculate.", "bad"); return; }
+  let updated = 0, failed = 0, skipped = 0;
+  const BATCH = 50;
+  for (let i = 0; i < data.length; i += BATCH) {
+    const chunk = data.slice(i, i + BATCH);
+    const promises = chunk.map(p => {
+      const month = String(p.shipped_at).slice(0, 7);
+      const rate = rates[month] || fallback;
+      if (!rate) { skipped++; return Promise.resolve(null); }
+      const newCost = +(p.cny / rate).toFixed(2);
+      return S.sb.from("parcels").update({ cost: newCost }).eq("barcode", p.barcode);
+    });
+    const results = await Promise.all(promises);
+    for (const r of results) {
+      if (!r) continue;
+      if (r.error) failed++; else updated++;
+    }
+    toast("Recalculating… " + Math.min(i + BATCH, data.length) + "/" + data.length, "ok");
+  }
+  toast("Done! " + updated + " updated, " + failed + " failed, " + skipped + " skipped.", "ok");
+  render();
+}
+
 /* ---------------------------------------------------------------- drawer --- */
 /* One parcel, everything known about it, and whatever the person looking at it
    is allowed to do. The money lines simply are not there for a scanner — the
@@ -4236,6 +4269,14 @@ function vSetup() {
     };
     addRow.append(addBtn);
     g.append(addRow);
+
+    const recalcBtn = el("button", "btn pri", "Recalculate all parcel costs");
+    recalcBtn.style.marginTop = "10px";
+    recalcBtn.onclick = recalcAllCosts;
+    g.append(recalcBtn);
+    const recalcNote = el("div", "sub2");
+    recalcNote.textContent = "Re-applies each monthly rate to every parcel based on its shipped month.";
+    g.append(recalcNote);
   }
 
   sec("Fallback rate");
