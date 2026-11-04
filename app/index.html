@@ -4174,10 +4174,20 @@ const isScanFile = headers => {
 function scanShelves(rows) {
   const by = new Map();
   for (const r of rows) {
-    if (!by.has(r.shelf)) by.set(r.shelf, { shelf: r.shelf, n: 0, zone: "", why: "" });
-    by.get(r.shelf).n++;
+    const key = r.shelf;
+    if (!by.has(key)) by.set(key, { shelf: key, n: 0, zone: "", why: "" });
+    by.get(key).n++;
   }
   for (const s of by.values()) {
+    const zm = s.shelf.match(/^ZONE-(.+)$/i);
+    if (zm) {
+      const code = zm[1].toUpperCase();
+      const z = S.zones.find(x => x.code.toUpperCase() === code);
+      s.zone = z ? z.code : code;
+      s.shelf = code;
+      if (!z) s.why = "zone "" + code + "" is not set up yet";
+      continue;
+    }
     const asZone = S.zones.find(z => z.code.toUpperCase() === s.shelf);
     if (asZone) { s.zone = asZone.code; continue; }
     const bad = shelfOutOfRange(s.shelf);
@@ -4202,7 +4212,12 @@ function buildScanRows() {
     if (!barcode || !shelf) { blank++; continue; }
     const at = iAt >= 0 ? String(r[iAt] || "").trim() : "";
     const when = at && !isNaN(Date.parse(at)) ? new Date(at).toISOString() : null;
-    rows.push({ barcode, shelf, zone: zoneForShelf(shelf) || null, at: when });
+    const zm = shelf.match(/^ZONE-(.+)$/);
+    if (zm) {
+      rows.push({ barcode, shelf: zm[1], zone: zm[1], at: when });
+    } else {
+      rows.push({ barcode, shelf, zone: zoneForShelf(shelf) || null, at: when });
+    }
   }
   return { rows, blank };
 }
