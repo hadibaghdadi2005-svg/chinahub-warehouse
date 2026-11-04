@@ -4185,7 +4185,7 @@ function scanShelves(rows) {
       const z = S.zones.find(x => x.code.toUpperCase() === code);
       s.zone = z ? z.code : code;
       s.shelf = code;
-      if (!z) s.why = "zone "" + code + "" is not set up yet";
+      if (!z) s.why = "zone " + code + " is not set up yet";
       continue;
     }
     const asZone = S.zones.find(z => z.code.toUpperCase() === s.shelf);
