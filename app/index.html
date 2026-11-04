@@ -3674,6 +3674,11 @@ function vWaseet() {
     const markPaid = el("button", "btn sm pri", "Mark paid");
     markPaid.onclick = () => waseetMarkPaid();
     selBar.append(markPaid);
+    const markUnpaid = el("button", "btn sm", "Mark unpaid");
+    markUnpaid.style.background = "var(--warning, #e67e22)"; markUnpaid.style.color = "#fff";
+    markUnpaid.style.borderColor = "var(--warning, #e67e22)";
+    markUnpaid.onclick = () => waseetMarkUnpaid();
+    selBar.append(markUnpaid);
   }
   v.append(selBar);
 
@@ -3749,6 +3754,18 @@ async function waseetMarkPaid() {
     .in("barcode", codes);
   if (error) { toast(error.message, "bad"); return; }
   toast(nf0.format(codes.length) + " marked paid", "ok");
+  S.waseetSel.clear();
+  loadWaseet();
+}
+
+async function waseetMarkUnpaid() {
+  const codes = [...S.waseetSel];
+  if (!codes.length) return;
+  const { error } = await S.sb.from("parcels")
+    .update({ paid: false })
+    .in("barcode", codes);
+  if (error) { toast(error.message, "bad"); return; }
+  toast(nf0.format(codes.length) + " marked unpaid", "ok");
   S.waseetSel.clear();
   loadWaseet();
 }
