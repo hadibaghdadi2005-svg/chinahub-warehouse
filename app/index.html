@@ -490,6 +490,7 @@ const S = {
   waseetDate: "",
   waseetSort: "desc",
   waseetSel: new Set(),
+  waseetOpen: new Set(),
   waseetQ: "",
 
   /* money date filter */
@@ -3804,39 +3805,91 @@ function vWaseet() {
   }
   v.append(selBar);
 
-  /* parcel list */
-  const list = el("div", "list");
+  /* parcel list — grouped by client_id */
+  const groups = new Map();
   for (const r of rows) {
-    const li = el("div", "li");
-    const cb = document.createElement("input");
-    cb.type = "checkbox";
-    cb.checked = S.waseetSel.has(r.barcode);
-    cb.style.marginRight = "10px"; cb.style.flexShrink = "0";
-    cb.onchange = () => {
-      if (cb.checked) S.waseetSel.add(r.barcode);
-      else S.waseetSel.delete(r.barcode);
+    const key = r.client_id || r.barcode;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(r);
+  }
+
+  const list = el("div", "list");
+  for (const [cid, parcels] of groups) {
+    const first = parcels[0];
+    let grpOwed = 0, grpTotal = 0;
+    for (const p of parcels) { const c = Number(p.cost) || 0; grpTotal += c; if (!p.paid) grpOwed += c; }
+
+    /* group header */
+    const ghdr = el("div", "li");
+    ghdr.style.cursor = "pointer"; ghdr.style.fontWeight = "600";
+    ghdr.style.borderLeft = "3px solid var(--accent, #3498db)";
+    const gcb = document.createElement("input");
+    gcb.type = "checkbox";
+    gcb.checked = parcels.every(p => S.waseetSel.has(p.barcode));
+    gcb.style.marginRight = "10px"; gcb.style.flexShrink = "0";
+    gcb.onclick = (ev) => ev.stopPropagation();
+    gcb.onchange = () => {
+      if (gcb.checked) parcels.forEach(p => S.waseetSel.add(p.barcode));
+      else parcels.forEach(p => S.waseetSel.delete(p.barcode));
       render();
     };
-    li.append(cb);
-    const m = el("div", "li-m");
-    const nm = el("div", "li-nm");
-    nm.append(el("span", "mono", r.barcode));
-    nm.append(el("span", "chip " + (r.paid ? "s-delivered" : "off"), r.paid ? "Paid" : "Unpaid"));
-    m.append(nm);
-    const bits = [];
-    if (r.customer) bits.push(r.customer);
-    if (r.client_id) bits.push("(" + r.client_id + ")");
-    if (r.phone) bits.push(r.phone);
-    m.append(el("div", "li-s", bits.join("  ·  ")));
-    li.append(m);
-    const a = el("div", "li-a");
-    const cost = Number(r.cost) || 0;
-    const c = el("span", "mono num", money(cost));
-    c.style.fontWeight = "600";
-    if (!r.paid) c.style.color = "var(--danger)";
-    a.append(c);
-    li.append(a);
-    list.append(li);
+    ghdr.append(gcb);
+    const gm = el("div", "li-m");
+    const gnm = el("div", "li-nm");
+    gnm.append(el("span", null, first.customer || cid));
+    if (first.client_id) gnm.append(el("span", "chip", first.client_id));
+    gnm.append(el("span", "chip", nf0.format(parcels.length) + (parcels.length === 1 ? " parcel" : " parcels")));
+    gm.append(gnm);
+    if (first.phone) gm.append(el("div", "li-s", first.phone));
+    ghdr.append(gm);
+    const ga = el("div", "li-a");
+    const gt = el("span", "mono num", money(grpOwed));
+    gt.style.fontWeight = "700";
+    if (grpOwed > 0) gt.style.color = "var(--danger)";
+    ga.append(gt);
+    ghdr.append(ga);
+
+    const detail = el("div");
+    detail.style.paddingLeft = "20px";
+    detail.style.display = S.waseetOpen && S.waseetOpen.has(cid) ? "block" : "none";
+    ghdr.onclick = () => {
+      if (!S.waseetOpen) S.waseetOpen = new Set();
+      if (S.waseetOpen.has(cid)) S.waseetOpen.delete(cid);
+      else S.waseetOpen.add(cid);
+      detail.style.display = S.waseetOpen.has(cid) ? "block" : "none";
+    };
+
+    for (const r of parcels) {
+      const li = el("div", "li");
+      li.style.paddingLeft = "8px";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = S.waseetSel.has(r.barcode);
+      cb.style.marginRight = "10px"; cb.style.flexShrink = "0";
+      cb.onclick = (ev) => ev.stopPropagation();
+      cb.onchange = () => {
+        if (cb.checked) S.waseetSel.add(r.barcode);
+        else S.waseetSel.delete(r.barcode);
+        render();
+      };
+      li.append(cb);
+      const m = el("div", "li-m");
+      const nm = el("div", "li-nm");
+      nm.append(el("span", "mono", r.barcode));
+      nm.append(el("span", "chip " + (r.paid ? "s-delivered" : "off"), r.paid ? "Paid" : "Unpaid"));
+      m.append(nm);
+      li.append(m);
+      const a = el("div", "li-a");
+      const cost = Number(r.cost) || 0;
+      const c = el("span", "mono num", money(cost));
+      c.style.fontWeight = "600";
+      if (!r.paid) c.style.color = "var(--danger)";
+      a.append(c);
+      li.append(a);
+      detail.append(li);
+    }
+    list.append(ghdr);
+    list.append(detail);
   }
   v.append(list);
 
