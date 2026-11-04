@@ -3378,6 +3378,10 @@ function shipmentRow(r) {
     a.append(d);
     if (r.delivery_to === "waseet") {
       a.append(el("span", "chip s-released", "With Waseet"));
+      const undo = el("button", "btn sm", "Undo");
+      undo.style.fontSize = "11px";
+      undo.onclick = () => undoShipWaseet(r);
+      a.append(undo);
     } else {
       const w = el("button", "btn sm", "→ Waseet");
       w.style.background = "var(--accent, #8e44ad)"; w.style.color = "#fff";
@@ -3411,6 +3415,15 @@ async function sendShipToWaseet(r) {
     .eq("ship_num", r.ship_num);
   if (error) { toast(error.message, "bad"); return; }
   toast("Shipment #" + r.ship_num + " sent to Waseet for delivery", "ok");
+  loadShipments(); loadShipStats();
+}
+
+async function undoShipWaseet(r) {
+  const { error } = await S.sb.from("shipments")
+    .update({ delivery_to: null })
+    .eq("ship_num", r.ship_num);
+  if (error) { toast(error.message, "bad"); return; }
+  toast("Shipment #" + r.ship_num + " removed from Waseet", "ok");
   loadShipments(); loadShipStats();
 }
 
