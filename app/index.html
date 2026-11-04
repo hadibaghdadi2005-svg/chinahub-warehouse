@@ -3777,10 +3777,14 @@ function vWaseet() {
     if (note) d.append(el("div", "n", note));
     return d;
   };
+  const orderIds = new Set();
+  for (const r of rows) if (r.client_id) orderIds.add(r.client_id);
+  for (const s of wShips) orderIds.add("ship-" + s.ship_num);
   tiles.append(
     tile("Collect from Waseet", money(totalOwed + shipOwed),
       nf0.format(unpaidCount) + " parcels + " + nf0.format(shipUnpaid) + " shipments", "var(--danger)"),
     tile("Already paid direct", money(totalPaid + shipPaidAmt), "client paid — not with Waseet", "var(--ok)"),
+    tile("Total Orders", nf0.format(orderIds.size), "unique clients + shipments"),
     tile("Total with Waseet", nf0.format(rows.length + wShips.length),
       nf0.format(rows.length) + " parcels · " + nf0.format(wShips.length) + " shipments"),
   );
