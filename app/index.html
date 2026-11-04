@@ -10,6 +10,7 @@
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js"></script>
 <style>
 /* The tokens are the warehouse app's own, so the two look like one product. */
 :root{
@@ -69,6 +70,30 @@ button{cursor:pointer}
 @media (prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;transition-duration:.01ms!important}}
 
 .gut{padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+
+/* ---------- labels ---------- */
+.lbl-tabs{display:flex;gap:6px;margin-bottom:14px}
+.lbl-tab{padding:7px 14px;border-radius:var(--r-sm);font-size:13.5px;font-weight:600;background:var(--surface-2);border:1px solid var(--line);color:var(--fg-dim)}
+.lbl-tab.on{background:var(--primary);border-color:var(--primary);color:var(--primary-fg)}
+.lbl-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+.lbl-card{background:var(--surface);border:2px dashed var(--line);border-radius:var(--r);padding:16px;page-break-inside:avoid;break-inside:avoid}
+.lbl-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.lbl-code{font-family:var(--mono);font-size:16px;font-weight:700;letter-spacing:.04em}
+.lbl-chip{font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;text-transform:uppercase;letter-spacing:.05em;color:#fff}
+.lbl-chip.sea{background:#0891b2}.lbl-chip.air{background:#d97706}
+.lbl-name{font-size:14px;font-weight:600;margin-bottom:2px}
+.lbl-info{font-size:12px;color:var(--fg-dim);margin-bottom:10px}
+.lbl-card svg{display:block;margin:0 auto;max-width:100%}
+.lbl-cut{margin-top:10px;border-top:1px dashed var(--line);padding-top:5px;font-size:10px;color:var(--fg-faint);letter-spacing:.06em;text-transform:uppercase;font-family:var(--mono);text-align:center}
+@media print{
+  .tabs,.who,.top-bar,.toasts,.lbl-tabs,.no-print{display:none!important}
+  body{background:#fff;color:#000}
+  .lbl-card{background:#fff;border-color:#bbb}
+  .lbl-card svg{max-height:60px}
+  .lbl-code,.lbl-name{color:#000}
+  .lbl-info{color:#555}
+  .lbl-cut{color:#999;border-color:#ccc}
+}
 
 /* ---------- sign in ---------- */
 .auth{min-height:100dvh;display:grid;place-items:center;padding:24px 0}
@@ -382,6 +407,7 @@ const branchLabel = () => {
 const MODES = {
   receive: { label: "Receive", sub: "arrived at the hub",  to: "received",  verb: "Received" },
   shelve:  { label: "Put away", sub: "onto a shelf",       to: "shelved",   verb: "Shelved" },
+  zone:    { label: "To zone",  sub: "scan zone then parcels", to: "shelved", verb: "Zoned" },
   branch:  { label: "To a branch", sub: "for collection",  to: "at_branch", verb: "Sent to" },
   release: { label: "Release", sub: "to a driver",         to: "released",  verb: "Released" },
   deliver: { label: "Deliver", sub: "to the customer",     to: "delivered", verb: "Delivered" },
@@ -418,6 +444,10 @@ const S = {
   custPageSize: 50,
   custTotal: 0,
 
+  /* labels */
+  labelTab: "zones",
+  labelShips: null,
+
   /* setup */
   brand: null,         /* what the warehouse is called, per the database */
   cfgDraft: null,      /* edits in progress; nothing is written until Save */
@@ -447,6 +477,7 @@ const S = {
   zones: [],
   mode: "lookup",
   dest: { zone: "", shelf: "" },   /* where "put away" is currently filing to */
+  scanZone: "",                    /* zone-scan mode: the zone scanned barcodes go to */
   recvZone: "SHIP",                /* where a receive scan lands */
   branchZone: "",                  /* which branch a branch scan goes to */
   scanFeed: [],
@@ -635,6 +666,9 @@ function shell(view) {
         if (!S.ships) loadShipments();
         if (!S.shipStats) loadShipStats();
       }
+      if (t.id === "labels") {
+        if (!S.labelShips) loadLabelShipments();
+      }
     };
     tabs.append(b);
   }
@@ -661,6 +695,7 @@ function visibleTabs() {
   /* Office may read the rates — they are behind every charge — but only an
      admin may change them, which the screen itself makes plain. */
   if (sees_money()) t.push({ id: "setup", label: "Setup" });
+  t.push({ id: "labels", label: "Labels" });
   if (isAdmin()) t.push({ id: "staff", label: "Staff" });
   return t;
 }
@@ -787,11 +822,84 @@ async function moveParcel(p, to, loc, note) {
 async function handleScan(raw) {
   const bc = normBc(raw);
   if (!bc) return;
+
+  /* Recognise printed zone barcodes (ZONE-A, ZONE-RCV, …) in any mode. */
+  const zoneMatch = bc.match(/^ZONE-(.+)$/i);
+  if (zoneMatch) {
+    const code = zoneMatch[1].toUpperCase();
+    const zone = S.zones.find(z => z.code.toUpperCase() === code);
+    if (!zone) { ping(false); feedPush("bad", bc, "Unknown zone " + code); render(); focusScan(); return; }
+    if (S.mode === "zone") {
+      S.scanZone = zone.code;
+      ping(true); feedPush("ok", bc, "Zone set to " + (zone.label || zone.code) + " — now scan parcels");
+    } else if (S.mode === "shelve") {
+      S.dest = { zone: zone.code, shelf: "" };
+      ping(true); feedPush("ok", bc, "Filing to zone " + zone.code);
+    } else if (S.mode === "receive") {
+      S.recvZone = zone.code;
+      ping(true); feedPush("ok", bc, "Receiving into " + (zone.label || zone.code));
+    } else {
+      ping(true); feedPush("ok", bc, (zone.label || zone.code) + " — zone barcode (switch to Zone mode to assign parcels)");
+    }
+    render(); focusScan(); return;
+  }
+
+  /* Recognise printed shipment barcodes (SHIP-123) — look up parcels by shipment. */
+  const shipMatch = bc.match(/^SHIP-(\d+)$/i);
+  if (shipMatch) {
+    S.scanBusy = true; render();
+    try {
+      const shipNum = shipMatch[1];
+      const { data, error } = await S.sb.from("parcels_view")
+        .select("barcode,name,customer,status,zone,shelf,shipment")
+        .eq("shipment", shipNum).limit(200);
+      if (error) throw error;
+      if (!data || !data.length) {
+        ping(false); feedPush("bad", bc, "No parcels found for shipment #" + shipNum);
+        return;
+      }
+      if (S.mode === "zone" && S.scanZone) {
+        let moved = 0;
+        for (const p of data) {
+          try {
+            await moveParcel(p, "shelved", { zone: S.scanZone, shelf: "" });
+            moved++;
+          } catch (_) {}
+        }
+        S.stats = null; S.rows = null; S.zoneStats = null;
+        ping(true); feedPush("ok", bc, moved + " parcels from shipment #" + shipNum + " → zone " + S.scanZone, true);
+      } else {
+        ping(true); feedPush("ok", bc, "Shipment #" + shipNum + ": " + data.length +
+          " parcels — " + data.filter(p => p.status === "shelved").length + " shelved, " +
+          data.filter(p => p.status === "received").length + " received");
+      }
+      return;
+    } catch (e) {
+      ping(false); feedPush("bad", bc, "Could not look up shipment — " + ((e && e.message) || "try again"));
+      return;
+    } finally { S.scanBusy = false; render(); focusScan(); }
+  }
+
   S.scanBusy = true; render();
   try {
     let known;
     try { known = await findParcel(bc); }
     catch (e) { ping(false); feedPush("bad", bc, "Could not reach the database — try again"); return; }
+
+    /* Zone mode: assign the parcel to the scanned zone. */
+    if (S.mode === "zone") {
+      if (!known) { ping(false); feedPush("bad", bc, "No parcel with this barcode"); return; }
+      if (!S.scanZone) { ping(false); feedPush("bad", bc, "Scan a zone barcode first (ZONE-X)"); return; }
+      try {
+        const res = await moveParcel(known, "shelved", { zone: S.scanZone, shelf: "" });
+        S.undo = { barcode: bc, name: known.name, before: res.before };
+        S.stats = null; S.rows = null; S.zoneStats = null;
+        ping(true); feedPush("ok", bc, (known.name || "Parcel") + " → zone " + S.scanZone, true);
+      } catch (e) {
+        ping(false); feedPush("bad", bc, (e && e.message) || "Could not save — try again");
+      }
+      return;
+    }
 
     /* Putting away: an unknown code is a shelf label or a zone. */
     if (S.mode === "shelve" && !known) {
@@ -989,6 +1097,37 @@ function vScan() {
       d.append(el("div", "sub2", "These leave the warehouse but are not delivered yet — " +
         "the customer collects them there. Mark them delivered when they do."));
     }
+    v.append(d);
+  }
+  if (S.mode === "zone") {
+    const d = el("div", "card pad");
+    d.style.marginBottom = "12px";
+    const r = el("div", "row");
+    r.append(el("span", "li-s", "Assigning to zone"));
+    const tag = el("span", "mono", S.scanZone || "none yet");
+    tag.style.fontSize = "17px"; tag.style.fontWeight = "700";
+    if (!S.scanZone) tag.style.color = "var(--fg-faint)";
+    r.append(tag);
+    const sel = el("select", "inp sm");
+    sel.style.width = "auto"; sel.style.minHeight = "34px"; sel.style.marginLeft = "auto";
+    const none = el("option", null, "or pick…"); none.value = "";
+    sel.append(none);
+    for (const z of S.zones) {
+      const o = el("option", null, z.label || z.code);
+      o.value = z.code;
+      if (z.code === S.scanZone) o.selected = true;
+      sel.append(o);
+    }
+    sel.onchange = () => { S.scanZone = sel.value; render(); focusScan(); };
+    r.append(sel);
+    if (S.scanZone) {
+      const clr = el("button", "btn sm", "Clear");
+      clr.onclick = () => { S.scanZone = ""; render(); focusScan(); };
+      r.append(clr);
+    }
+    d.append(r);
+    d.append(el("div", "li-s", "Scan a zone barcode (ZONE-A, ZONE-B…) or pick from the list, " +
+      "then scan parcels to assign them there. Shipment barcodes (SHIP-123) assign all parcels in that shipment."));
     v.append(d);
   }
   if (S.mode === "receive") {
@@ -1850,6 +1989,157 @@ async function loadZoneStats() {
   const { data, error } = await S.sb.rpc("zone_summary");
   if (error) { toast("Could not read the zones — " + error.message, "bad"); return; }
   S.zoneStats = data || [];
+  render();
+}
+
+/* ---------------------------------------------------------------- labels --- */
+
+function vLabels() {
+  const v = el("section");
+  const head = el("div", "vhead");
+  const h = el("div");
+  h.append(el("h2", null, "Labels"));
+  h.append(el("div", "sub", "Printable barcode labels for zones and shipments. " +
+    "Print and cut to place on shelves, containers or client goods."));
+  head.append(h);
+  const pr = el("button", "btn pri no-print", "Print");
+  pr.style.marginLeft = "auto";
+  pr.onclick = () => window.print();
+  head.append(pr);
+  v.append(head);
+
+  const tabs = el("div", "lbl-tabs no-print");
+  for (const t of [{ id: "zones", label: "Zone labels" }, { id: "shipments", label: "Shipment labels" }]) {
+    const b = el("button", "lbl-tab" + (S.labelTab === t.id ? " on" : ""), t.label);
+    b.onclick = () => {
+      S.labelTab = t.id;
+      if (t.id === "shipments" && !S.labelShips) loadLabelShipments();
+      render();
+    };
+    tabs.append(b);
+  }
+  v.append(tabs);
+
+  if (S.labelTab === "zones") v.append(vLabelZones());
+  else v.append(vLabelShipments());
+  return v;
+}
+
+function vLabelZones() {
+  const f = document.createDocumentFragment();
+  if (!S.zones.length) {
+    const e = el("div", "empty");
+    e.append(el("b", null, "No zones"));
+    e.append(document.createTextNode("Set up zones in Setup first."));
+    f.append(e);
+    return f;
+  }
+  const g = el("div", "lbl-grid");
+  const fg = getComputedStyle(document.documentElement).getPropertyValue("--fg").trim() || "#141e1d";
+  for (const z of S.zones) {
+    const card = el("div", "lbl-card");
+    const top = el("div", "lbl-top");
+    top.append(el("span", "lbl-code", z.code));
+    const kindChip = el("span", "lbl-chip");
+    kindChip.textContent = z.kind || "zone";
+    kindChip.style.background = z.kind === "branch" ? "#7c3aed" : "var(--primary)";
+    top.append(kindChip);
+    card.append(top);
+    card.append(el("div", "lbl-name", z.label || z.code));
+    if (z.note) card.append(el("div", "lbl-info", z.note));
+
+    const bcVal = "ZONE-" + z.code;
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.id = "zbc-" + z.code;
+    card.append(svg);
+    card.append(el("div", "lbl-cut", "✂ cut here · " + bcVal));
+    g.append(card);
+  }
+  f.append(g);
+
+  requestAnimationFrame(() => {
+    const fg = getComputedStyle(document.documentElement).getPropertyValue("--fg").trim() || "#141e1d";
+    for (const z of S.zones) {
+      const svgEl = document.getElementById("zbc-" + z.code);
+      if (!svgEl) continue;
+      try {
+        JsBarcode("#zbc-" + z.code, "ZONE-" + z.code, {
+          format: "CODE128", width: 2, height: 55, displayValue: true,
+          text: "ZONE-" + z.code, fontSize: 12, font: "IBM Plex Mono, monospace",
+          textMargin: 5, margin: 4, lineColor: fg
+        });
+      } catch (_) {}
+    }
+  });
+  return f;
+}
+
+function vLabelShipments() {
+  const f = document.createDocumentFragment();
+  if (!S.labelShips) {
+    const e = el("div", "empty");
+    e.append(el("span", "spin"));
+    e.append(el("div", null, "Loading shipments…"));
+    f.append(e);
+    return f;
+  }
+  if (!S.labelShips.length) {
+    const e = el("div", "empty");
+    e.append(el("b", null, "No shipments yet"));
+    f.append(e);
+    return f;
+  }
+
+  const g = el("div", "lbl-grid");
+  for (const s of S.labelShips) {
+    const card = el("div", "lbl-card");
+    const top = el("div", "lbl-top");
+    top.append(el("span", "lbl-code", "#" + s.ship_num));
+    if (s.mode) {
+      const chip = el("span", "lbl-chip " + s.mode, s.mode);
+      top.append(chip);
+    }
+    card.append(top);
+    card.append(el("div", "lbl-name", s.client || s.code || "—"));
+    const info = [];
+    if (s.goods) info.push(s.goods);
+    if (s.weight_kg) info.push(s.weight_kg + " kg");
+    if (s.volume_cbm) info.push(s.volume_cbm + " CBM");
+    if (info.length) card.append(el("div", "lbl-info", info.join(" · ")));
+
+    const bcVal = "SHIP-" + s.ship_num;
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.id = "sbc-" + s.ship_num;
+    card.append(svg);
+    card.append(el("div", "lbl-cut", "✂ cut here · " + bcVal));
+    g.append(card);
+  }
+  f.append(g);
+
+  requestAnimationFrame(() => {
+    const fg = getComputedStyle(document.documentElement).getPropertyValue("--fg").trim() || "#141e1d";
+    for (const s of S.labelShips) {
+      const svgEl = document.getElementById("sbc-" + s.ship_num);
+      if (!svgEl) continue;
+      try {
+        JsBarcode("#sbc-" + s.ship_num, "SHIP-" + s.ship_num, {
+          format: "CODE128", width: 2, height: 50, displayValue: true,
+          text: "SHIP-" + s.ship_num, fontSize: 12, font: "IBM Plex Mono, monospace",
+          textMargin: 5, margin: 4, lineColor: fg
+        });
+      } catch (_) {}
+    }
+  });
+  return f;
+}
+
+async function loadLabelShipments() {
+  S.labelShips = null; render();
+  const { data, error } = await S.sb.from("shipments")
+    .select("ship_num,code,client,mode,goods,weight_kg,volume_cbm")
+    .order("ship_num", { ascending: false }).limit(200);
+  if (error) { toast("Could not load shipments — " + error.message, "bad"); S.labelShips = []; render(); return; }
+  S.labelShips = data || [];
   render();
 }
 
@@ -4487,6 +4777,7 @@ function render() {
              : S.tab === "setup" && sees_money() ? vSetup()
              : S.tab === "shipping" && sees_money() ? vShipping()
              : S.tab === "money" && sees_money() ? vMoney()
+             : S.tab === "labels" ? vLabels()
              : S.tab === "stock" ? vStock()
              : S.tab === "zones" ? vZones()
              : vScan();
