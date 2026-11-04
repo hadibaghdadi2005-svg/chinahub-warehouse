@@ -473,6 +473,7 @@ const S = {
   /* money — office and admin only */
   money: null,
   cfg: null,           /* rates and lane prices, readable only with the money */
+  monthlyRates: null,  /* {month: cny_per_usd} from monthly_rates table */
   customers: null,
   custSearch: "",
   custOwing: true,
@@ -2468,6 +2469,22 @@ function ratesPanel() {
   card.append(el("div", "sub2", "1 USD = " + nf0.format(Number(S.money.lbp_rate) || 0) +
     " LL. A charge is worked out when a parcel is priced, so changing a rate " +
     "here does not move a charge already made."));
+
+  /* show monthly CNY/USD rates */
+  if (S.monthlyRates && Object.keys(S.monthlyRates).length) {
+    const mrHr = el("div", "hr-t");
+    mrHr.style.marginTop = "14px";
+    mrHr.append(el("span", "sect-t", "Monthly CNY/USD rates"));
+    card.append(mrHr);
+    const mrg = el("div", "lanes");
+    for (const mm of Object.keys(S.monthlyRates).sort().reverse()) {
+      const r = el("div", "lane");
+      r.append(el("span", "ln", mm));
+      r.append(el("span", "lp mono num", S.monthlyRates[mm].toFixed(4)));
+      mrg.append(r);
+    }
+    card.append(mrg);
+  }
   return card;
 }
 
@@ -2567,10 +2584,44 @@ async function loadCustomers() {
 /* The lane prices live in settings, which only office and admin may read. */
 async function loadCfg() {
   if (!sees_money()) return;
-  const { data, error } = await S.sb.from("settings").select("data").eq("id", 1).maybeSingle();
-  if (error) return;
-  S.cfg = (data && data.data) || null;
+  const [cfgRes, ratesRes] = await Promise.all([
+    S.sb.from("settings").select("data").eq("id", 1).maybeSingle(),
+    S.sb.from("monthly_rates").select("month,cny_per_usd").order("month", { ascending: false }),
+  ]);
+  if (!cfgRes.error) S.cfg = (cfgRes.data && cfgRes.data.data) || null;
+  if (!ratesRes.error && ratesRes.data) {
+    const m = {};
+    for (const r of ratesRes.data) m[r.month] = Number(r.cny_per_usd);
+    S.monthlyRates = m;
+  } else {
+    S.monthlyRates = {};
+  }
   render();
+}
+
+async function saveMonthlyRate(month, rate) {
+  const { error } = await S.sb.from("monthly_rates")
+    .upsert({ month, cny_per_usd: rate }, { onConflict: "month" });
+  if (error) { toast(error.message, "bad"); return; }
+  if (!S.monthlyRates) S.monthlyRates = {};
+  S.monthlyRates[month] = rate;
+  toast("Rate for " + month + " saved: " + rate, "ok");
+  render();
+}
+
+async function deleteMonthlyRate(month) {
+  const { error } = await S.sb.from("monthly_rates").delete().eq("month", month);
+  if (error) { toast(error.message, "bad"); return; }
+  if (S.monthlyRates) delete S.monthlyRates[month];
+  toast("Rate for " + month + " removed", "ok");
+  render();
+}
+
+function rateForMonth(dateStr) {
+  if (!dateStr) return Number(S.cfg && S.cfg.cnyPerUsd) || 0;
+  const month = String(dateStr).slice(0, 7);
+  if (S.monthlyRates && S.monthlyRates[month]) return S.monthlyRates[month];
+  return Number(S.cfg && S.cfg.cnyPerUsd) || 0;
 }
 
 /* ---------------------------------------------------------------- drawer --- */
@@ -4134,7 +4185,58 @@ function vSetup() {
   sec("Currency");
   g = grid();
   fld(g, "lbpRate", "1 USD in Lebanese pounds", "Used only for display.", "number");
-  fld(g, "cnyPerUsd", "Yuan per 1 USD", "What the dashboard's ￥ figures are converted at.", "number");
+  fld(g, "cnyPerUsd", "Yuan per 1 USD", "Fallback when no monthly rate is set.", "number");
+
+  /* monthly rates editor */
+  sec("Monthly CNY/USD rates");
+  g = grid();
+  const mrNote = el("div", "sub2");
+  mrNote.textContent = "Set a rate per month. During import, parcels use the rate of their shipped month. If no monthly rate is set, the fallback above is used.";
+  g.append(mrNote);
+  const mrTable = el("div");
+  mrTable.style.display = "grid"; mrTable.style.gridTemplateColumns = "auto auto auto";
+  mrTable.style.gap = "6px 10px"; mrTable.style.alignItems = "center"; mrTable.style.marginTop = "10px";
+  mrTable.append(el("b", null, "Month")); mrTable.append(el("b", null, "Rate")); mrTable.append(el("b", null, ""));
+  const rates = S.monthlyRates || {};
+  const sortedMonths = Object.keys(rates).sort().reverse();
+  for (const mm of sortedMonths) {
+    mrTable.append(el("span", "mono", mm));
+    const rInp = el("input", "inp");
+    rInp.type = "number"; rInp.step = "0.0001"; rInp.value = rates[mm];
+    rInp.style.width = "100px";
+    rInp.disabled = ro;
+    rInp.onchange = () => saveMonthlyRate(mm, Number(rInp.value));
+    mrTable.append(rInp);
+    if (!ro) {
+      const del = el("button", "btn sm", "×");
+      del.style.color = "var(--danger)"; del.style.padding = "2px 8px";
+      del.onclick = () => deleteMonthlyRate(mm);
+      mrTable.append(del);
+    } else {
+      mrTable.append(el("span"));
+    }
+  }
+  g.append(mrTable);
+  if (!ro) {
+    const addRow = el("div", "row");
+    addRow.style.marginTop = "10px"; addRow.style.gap = "8px"; addRow.style.alignItems = "center";
+    const mInp = el("input", "inp");
+    mInp.type = "month"; mInp.style.width = "auto";
+    addRow.append(mInp);
+    const rInp = el("input", "inp");
+    rInp.type = "number"; rInp.step = "0.0001"; rInp.placeholder = "Rate";
+    rInp.style.width = "100px";
+    addRow.append(rInp);
+    const addBtn = el("button", "btn sm pri", "Add");
+    addBtn.onclick = async () => {
+      const month = mInp.value;
+      const rate = Number(rInp.value);
+      if (!month || !rate) { toast("Pick a month and enter a rate.", "bad"); return; }
+      await saveMonthlyRate(month, rate);
+    };
+    addRow.append(addBtn);
+    g.append(addRow);
+  }
 
   sec("Fallback rate");
   g = grid();
@@ -4771,7 +4873,7 @@ const normStatus = s => {
 /* Turn the mapped sheet into the rows the database's importer expects. */
 function buildImportRows() {
   const { headers, data, map } = S.imp;
-  const rate = Number(S.cfg && S.cfg.cnyPerUsd) || 0;
+  const fallbackRate = Number(S.cfg && S.cfg.cnyPerUsd) || 0;
   const num = s => {
     const n = parseFloat(String(s).replace(/[^\d.-]/g, ""));
     return isFinite(n) ? n : 0;
@@ -4821,13 +4923,14 @@ function buildImportRows() {
     }
     if (cbm) o.cbm = cbm;
 
-    /* Charge: yuan at the rate in Setup, unless a USD column is mapped. */
-    const cny = num(cell("cny"));
-    if (cny) { o.cny = cny; if (rate > 0) o.cost = +(cny / rate).toFixed(2); }
-    if (cell("cost")) o.cost = num(cell("cost"));
-
     const shipped = parseStamp(cell("shippedAtRaw"));
     if (shipped) o.shipped_at = shipped;
+
+    /* Charge: yuan at the monthly rate (or fallback), unless a USD column is mapped. */
+    const cny = num(cell("cny"));
+    const rate = shipped ? rateForMonth(shipped) : fallbackRate;
+    if (cny) { o.cny = cny; if (rate > 0) o.cost = +(cny / rate).toFixed(2); }
+    if (cell("cost")) o.cost = num(cell("cost"));
     const inbound = parseStamp(cell("inboundAtRaw"));
     if (inbound) o.inbound_at = inbound;
 
