@@ -76,7 +76,16 @@ button{cursor:pointer}
 .lbl-tab{padding:7px 14px;border-radius:var(--r-sm);font-size:13.5px;font-weight:600;background:var(--surface-2);border:1px solid var(--line);color:var(--fg-dim)}
 .lbl-tab.on{background:var(--primary);border-color:var(--primary);color:var(--primary-fg)}
 .lbl-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+.lbl-grid.lbl-a5{grid-template-columns:1fr;gap:24px;max-width:600px;margin:0 auto}
 .lbl-card{background:var(--surface);border:2px dashed var(--line);border-radius:var(--r);padding:16px;page-break-inside:avoid;break-inside:avoid}
+.lbl-card.lbl-card-a5{padding:32px 28px;min-height:400px;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center}
+.lbl-card-a5 .lbl-top{flex-direction:column;gap:10px;margin-bottom:16px}
+.lbl-card-a5 .lbl-code{font-size:42px;letter-spacing:.06em}
+.lbl-card-a5 .lbl-chip{font-size:16px;padding:6px 18px;border-radius:8px}
+.lbl-card-a5 .lbl-name{font-size:28px;margin-bottom:6px}
+.lbl-card-a5 .lbl-info{font-size:18px;margin-bottom:16px}
+.lbl-card-a5 svg{width:100%!important;max-width:480px}
+.lbl-card-a5 .lbl-cut{font-size:14px;margin-top:20px;padding-top:12px;width:100%}
 .lbl-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
 .lbl-code{font-family:var(--mono);font-size:16px;font-weight:700;letter-spacing:.04em}
 .lbl-chip{font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;text-transform:uppercase;letter-spacing:.05em;color:#fff}
@@ -90,6 +99,12 @@ button{cursor:pointer}
   body{background:#fff;color:#000}
   .lbl-card{background:#fff;border-color:#bbb}
   .lbl-card svg{max-height:60px}
+  .lbl-card-a5{page-break-after:always;width:148mm;min-height:210mm;padding:20mm 15mm;border:1px solid #bbb;box-sizing:border-box}
+  .lbl-card-a5 svg{max-height:none!important;max-width:120mm}
+  .lbl-card-a5 .lbl-code{font-size:48px;color:#000}
+  .lbl-card-a5 .lbl-name{font-size:32px;color:#000}
+  .lbl-card-a5 .lbl-info{font-size:18px;color:#555}
+  .lbl-card-a5 .lbl-cut{font-size:14px;color:#999;border-color:#ccc}
   .lbl-code,.lbl-name{color:#000}
   .lbl-info{color:#555}
   .lbl-cut{color:#999;border-color:#ccc}
@@ -2034,10 +2049,10 @@ function vLabelZones() {
     f.append(e);
     return f;
   }
-  const g = el("div", "lbl-grid");
+  const g = el("div", "lbl-grid lbl-a5");
   const fg = getComputedStyle(document.documentElement).getPropertyValue("--fg").trim() || "#141e1d";
   for (const z of S.zones) {
-    const card = el("div", "lbl-card");
+    const card = el("div", "lbl-card lbl-card-a5");
     const top = el("div", "lbl-top");
     top.append(el("span", "lbl-code", z.code));
     const kindChip = el("span", "lbl-chip");
@@ -2064,9 +2079,9 @@ function vLabelZones() {
       if (!svgEl) continue;
       try {
         JsBarcode("#zbc-" + z.code, "ZONE-" + z.code, {
-          format: "CODE128", width: 2, height: 55, displayValue: true,
-          text: "ZONE-" + z.code, fontSize: 12, font: "IBM Plex Mono, monospace",
-          textMargin: 5, margin: 4, lineColor: fg
+          format: "CODE128", width: 4, height: 120, displayValue: true,
+          text: "ZONE-" + z.code, fontSize: 22, font: "IBM Plex Mono, monospace",
+          textMargin: 8, margin: 8, lineColor: fg
         });
       } catch (_) {}
     }
