@@ -417,7 +417,7 @@ const STATUS = {
   received:  "In the warehouse",
   shelved:   "On a shelf",
   at_branch: "At a branch",
-  released:  "Out for delivery",
+  released:  "Waseet",
   delivered: "Delivered",
 };
 const ORDER = ["expected", "received", "shelved", "at_branch", "released", "delivered"];
@@ -445,7 +445,7 @@ const MODES = {
   shelve:  { label: "Put away", sub: "onto a shelf",       to: "shelved",   verb: "Shelved" },
   zone:    { label: "To zone",  sub: "scan zone then parcels", to: "shelved", verb: "Zoned" },
   branch:  { label: "To a branch", sub: "for collection",  to: "at_branch", verb: "Sent to" },
-  release: { label: "Release", sub: "to a driver",         to: "released",  verb: "Released" },
+  release: { label: "Waseet", sub: "cash on delivery",      to: "released",  verb: "Sent to Waseet" },
   deliver: { label: "Deliver", sub: "to the customer",     to: "delivered", verb: "Delivered" },
   lookup:  { label: "Look up", sub: "changes nothing",     to: null,        verb: "Found" },
 };
@@ -479,6 +479,22 @@ const S = {
   custPage: 0,
   custPageSize: 50,
   custTotal: 0,
+
+  /* summary */
+  summaryData: null,
+  summaryDate: "",
+
+  /* waseet */
+  waseetData: null,
+  waseetDate: "",
+  waseetSort: "desc",
+
+  /* money date filter */
+  moneyDate: "",
+
+  /* shipping date filter + sort */
+  shipDate: "",
+  shipSort: "",
 
   /* labels */
   labelTab: "zones",
@@ -707,6 +723,14 @@ function shell(view) {
       if (t.id === "labels") {
         if (!S.labelShips) loadLabelShipments();
       }
+      if (t.id === "summary") {
+        if (!S.money) loadMoney();
+        if (!S.shipStats) loadShipStats();
+        if (!S.summaryData) loadSummary();
+      }
+      if (t.id === "waseet") {
+        if (!S.waseetData) loadWaseet();
+      }
     };
     tabs.append(b);
   }
@@ -730,6 +754,8 @@ function visibleTabs() {
   /* The shipping line is commercial work; a scanner has no part in it, and
      every function behind it refuses them anyway. */
   if (sees_money()) t.push({ id: "shipping", label: "Shipping" });
+  if (sees_money()) t.push({ id: "summary", label: "Summary" });
+  if (sees_money()) t.push({ id: "waseet", label: "Waseet" });
   /* Office may read the rates — they are behind every charge — but only an
      admin may change them, which the screen itself makes plain. */
   if (sees_money()) t.push({ id: "setup", label: "Setup" });
@@ -1133,7 +1159,8 @@ function vScan() {
       r.append(sel);
       d.append(r);
       d.append(el("div", "sub2", "These leave the warehouse but are not delivered yet — " +
-        "the customer collects them there. Mark them delivered when they do."));
+        "the customer collects them there. Mark them delivered when they do. " +
+        "Parcels sent via Waseet go out for cash-on-delivery."));
     }
     v.append(d);
   }
@@ -1381,7 +1408,7 @@ function stockTiles() {
     tile("shelved", "On shelves", n(s.shelved), "located", f.status === "shelved"),
     tile("at_branch", "At " + branchLabel(), n(s.at_branch), "waiting to be collected",
       f.status === "at_branch"),
-    tile("released", "Out for delivery", n(s.released), "with a driver", f.status === "released"),
+    tile("released", "Waseet", n(s.released), "cash on delivery", f.status === "released"),
     tile("delivered", "Delivered", n(s.delivered), "handed over", f.status === "delivered"),
     tile("late", "Over free days", n(s.late_count), "past " + s.free_days + " days", f.paid === "late"),
     tile("long", "Here too long", n(s.long_count),
@@ -1702,7 +1729,7 @@ function bulkBar() {
   act("→ In the warehouse", () => askBulkMove("received"));
   act("→ On a shelf", () => askBulkMove("shelved"));
   act("→ " + branchLabel(), () => askBulkMove("at_branch"));
-  act("→ Out for delivery", () => askBulkMove("released"));
+  act("→ Waseet", () => askBulkMove("released"));
   act("→ Delivered", () => askBulkMove("delivered"));
   act("Export", exportSelection);
   act("Clear", () => { S.sel.clear(); render(); });
@@ -2224,7 +2251,8 @@ function vLabelShipments() {
 async function loadLabelShipments() {
   S.labelShips = null; render();
   const { data, error } = await S.sb.from("shipments")
-    .select("ship_num,code,client,mode,goods,weight_kg,volume_cbm,boxes,arrived_at,phone")
+    .select("ship_num,code,client,mode,goods,weight_kg,volume_cbm,boxes,arrived_at,phone,paid_at,delivered_at")
+    .is("paid_at", null).is("delivered_at", null)
     .order("ship_num", { ascending: false }).limit(200);
   if (error) { toast("Could not load shipments — " + error.message, "bad"); S.labelShips = []; render(); return; }
   S.labelShips = data || [];
@@ -2336,6 +2364,11 @@ function moneyFilters() {
   const go = el("button", "btn pri", "Search");
   go.type = "submit";
   bar.append(go);
+  const expBtn = el("button", "btn", "Export");
+  expBtn.type = "button";
+  expBtn.onclick = () => exportCustomers();
+  bar.append(expBtn);
+
   bar.addEventListener("submit", ev => {
     ev.preventDefault();
     S.custSearch = q.value; S.custPage = 0; loadCustomers();
@@ -3213,6 +3246,30 @@ function vShipping() {
   });
   v.append(bar);
 
+  /* date filter + sort + export row */
+  const toolRow = el("div", "row");
+  toolRow.style.marginBottom = "14px"; toolRow.style.gap = "8px"; toolRow.style.flexWrap = "wrap";
+  const dateInp = el("input", "inp");
+  dateInp.type = "date"; dateInp.value = S.shipDate;
+  dateInp.style.width = "auto";
+  dateInp.onchange = () => { S.shipDate = dateInp.value; loadShipments(); loadShipStats(); };
+  toolRow.append(dateInp);
+  if (S.shipDate) {
+    const dc = el("button", "btn", "Clear date");
+    dc.onclick = () => { S.shipDate = ""; loadShipments(); loadShipStats(); };
+    toolRow.append(dc);
+  }
+  const sortSel = el("select", "inp");
+  sortSel.style.width = "auto";
+  sortSel.innerHTML = '<option value="">Sort: recent</option><option value="desc">Amount: high→low</option><option value="asc">Amount: low→high</option>';
+  sortSel.value = S.shipSort;
+  sortSel.onchange = () => { S.shipSort = sortSel.value; loadShipments(); };
+  toolRow.append(sortSel);
+  const expBtn = el("button", "btn", "Export");
+  expBtn.onclick = () => exportShipments();
+  toolRow.append(expBtn);
+  v.append(toolRow);
+
   if (!S.ships) {
     const e = el("div", "empty");
     e.append(el("span", "spin"));
@@ -3307,14 +3364,17 @@ async function loadShipments() {
   if (f.paid === "unpaid") qy = qy.is("paid_at", null);
   if (f.paid === "paid") qy = qy.not("paid_at", "is", null);
   if (f.paid === "undelivered") qy = qy.is("delivered_at", null);
+  if (S.shipDate) qy = qy.eq("arrived_at", S.shipDate);
   const term = S.shipQ.trim();
   if (term) {
     const like = "%" + term.replace(/[%,()]/g, " ") + "%";
     qy = qy.or(["client.ilike." + like, "code.ilike." + like,
                 "container.ilike." + like].join(","));
   }
-  const { data, error } = await qy.order("raised_at", { ascending: false })
-    .order("ship_num", { ascending: false }).limit(300);
+  if (S.shipSort === "asc") qy = qy.order("total", { ascending: true });
+  else if (S.shipSort === "desc") qy = qy.order("total", { ascending: false });
+  else qy = qy.order("raised_at", { ascending: false });
+  const { data, error } = await qy.order("ship_num", { ascending: false }).limit(300);
   if (error) { toast(error.message, "bad"); S.ships = []; render(); return; }
   S.ships = data || [];
   render();
@@ -3330,6 +3390,317 @@ async function loadShipStats() {
   if (error) { toast("Could not add up the shipping — " + error.message, "bad"); return; }
   S.shipStats = (data && data[0]) || null;
   render();
+}
+
+/* ------------------------------------------------------ export shipments --- */
+async function exportShipments() {
+  if (!S.ships || !S.ships.length) { toast("Nothing to export.", "bad"); return; }
+  const cols = ["ship_num", "code", "client", "mode", "container", "boxes", "goods",
+    "weight_kg", "volume_cbm", "price", "total", "paid_amount", "raised_at",
+    "arrived_at", "delivered_at", "paid_at"];
+  const HEAD = { ship_num: "Shipment #", code: "Code", client: "Client", mode: "Mode",
+    container: "Container", boxes: "Boxes", goods: "Goods", weight_kg: "Weight (kg)",
+    volume_cbm: "Volume (CBM)", price: "Price", total: "Total", paid_amount: "Paid",
+    raised_at: "Raised", arrived_at: "Arrived", delivered_at: "Delivered", paid_at: "Paid date" };
+  const csv = [cols.map(c => csvCell(HEAD[c] || c)).join(",")]
+    .concat(S.ships.map(r => cols.map(c => csvCell(r[c])).join(",")))
+    .join("\n");
+  const name = "shipments-" + (S.shipDate || new Date().toISOString().slice(0, 10)) + ".csv";
+  if (offerFile(name, csv)) toast(nf0.format(S.ships.length) + " shipments exported", "ok");
+  else toast("The browser would not save the file.", "bad");
+}
+
+/* ------------------------------------------------------- export customers --- */
+async function exportCustomers() {
+  if (!S.customers || !S.customers.length) { toast("Nothing to export.", "bad"); return; }
+  const cols = ["client_id", "customer", "phone", "parcels", "unpaid", "owed", "total",
+    "oldest_unpaid_days"];
+  const HEAD = { client_id: "Client #", customer: "Customer", phone: "Phone",
+    parcels: "Parcels", unpaid: "Unpaid", owed: "Owed (USD)", total: "Total (USD)",
+    oldest_unpaid_days: "Oldest held (days)" };
+  const csv = [cols.map(c => csvCell(HEAD[c] || c)).join(",")]
+    .concat(S.customers.map(r => cols.map(c => csvCell(r[c])).join(",")))
+    .join("\n");
+  const name = "customers-" + new Date().toISOString().slice(0, 10) + ".csv";
+  if (offerFile(name, csv)) toast(nf0.format(S.customers.length) + " customers exported", "ok");
+  else toast("The browser would not save the file.", "bad");
+}
+
+/* ------------------------------------------------------------ summary --- */
+function vSummary() {
+  const v = el("section");
+  const head = el("div", "vhead");
+  const h = el("div");
+  h.append(el("h2", null, "Summary"));
+  h.append(el("div", "sub", "Financial overview — app clients and shipping clients received in Lebanon."));
+  head.append(h);
+  v.append(head);
+
+  /* date filter */
+  const toolRow = el("div", "row");
+  toolRow.style.marginBottom = "14px"; toolRow.style.gap = "8px"; toolRow.style.flexWrap = "wrap";
+  const dateInp = el("input", "inp");
+  dateInp.type = "date"; dateInp.value = S.summaryDate;
+  dateInp.style.width = "auto";
+  dateInp.onchange = () => { S.summaryDate = dateInp.value; loadSummary(); };
+  toolRow.append(dateInp);
+  if (S.summaryDate) {
+    const dc = el("button", "btn", "Clear date");
+    dc.onclick = () => { S.summaryDate = ""; loadSummary(); };
+    toolRow.append(dc);
+  }
+  const expBtn = el("button", "btn", "Export");
+  expBtn.onclick = () => exportSummary();
+  toolRow.append(expBtn);
+  v.append(toolRow);
+
+  const m = S.money;
+  const ss = S.shipStats;
+  const sd = S.summaryData;
+
+  if (!sd) {
+    const e = el("div", "empty");
+    e.append(el("span", "spin"));
+    e.append(el("div", null, "Adding up…"));
+    v.append(e);
+    return v;
+  }
+
+  const tiles = el("div", "tiles");
+  const tile = (k, val, note, colour) => {
+    const d = el("div", "tile");
+    d.append(el("div", "k", k));
+    const b = el("div", "v", val);
+    if (colour) b.style.color = colour;
+    d.append(b);
+    if (note) d.append(el("div", "n", note));
+    return d;
+  };
+
+  tiles.append(
+    tile("App clients owed", money(sd.app_owed), nf0.format(sd.app_unpaid_count || 0) + " unpaid parcels", "var(--danger)"),
+    tile("App clients collected", money(sd.app_collected), nf0.format(sd.app_customers || 0) + " customers", "var(--ok)"),
+    tile("Shipping owed", money(sd.ship_outstanding), nf0.format(sd.ship_unpaid_count || 0) + " unpaid shipments", "var(--danger)"),
+    tile("Shipping collected", money(sd.ship_collected), nf0.format(sd.ship_clients || 0) + " clients", "var(--ok)"),
+  );
+  v.append(tiles);
+
+  const totals = el("div", "tiles");
+  totals.style.marginTop = "8px";
+  const grandOwed = (Number(sd.app_owed) || 0) + (Number(sd.ship_outstanding) || 0);
+  const grandCollected = (Number(sd.app_collected) || 0) + (Number(sd.ship_collected) || 0);
+  totals.append(
+    tile("Total outstanding", money(grandOwed), "app + shipping combined", "var(--danger)"),
+    tile("Total collected", money(grandCollected), "app + shipping combined", "var(--ok)"),
+    tile("Received in Lebanon", nf0.format(sd.received_count || 0), "parcels at the hub"),
+  );
+  v.append(totals);
+  return v;
+}
+
+async function loadSummary() {
+  S.summaryData = null; render();
+  const dateFilter = S.summaryDate || null;
+  const promises = [];
+
+  let appQy = S.sb.from("parcels_view")
+    .select("cost,paid", { count: "exact" })
+    .not("status", "in", "(expected)");
+  if (dateFilter) appQy = appQy.eq("shipped_at", dateFilter);
+  promises.push(appQy);
+
+  let shipQy = S.sb.from("shipments")
+    .select("total,paid_amount,paid_at,arrived_at");
+  if (dateFilter) shipQy = shipQy.eq("arrived_at", dateFilter);
+  promises.push(shipQy);
+
+  let rcvQy = S.sb.from("parcels_view")
+    .select("barcode", { count: "exact" })
+    .in("status", ["received", "shelved", "at_branch", "released"]);
+  if (dateFilter) rcvQy = rcvQy.eq("shipped_at", dateFilter);
+  promises.push(rcvQy);
+
+  try {
+    const [appRes, shipRes, rcvRes] = await Promise.all([appQy, shipQy, rcvQy]);
+    const appRows = appRes.data || [];
+    const shipRows = shipRes.data || [];
+
+    let appOwed = 0, appCollected = 0, appUnpaid = 0, appCustomers = new Set();
+    for (const r of appRows) {
+      const c = Number(r.cost) || 0;
+      if (r.paid) appCollected += c;
+      else { appOwed += c; appUnpaid++; }
+    }
+
+    let shipOutstanding = 0, shipCollected = 0, shipUnpaid = 0, shipClients = new Set();
+    for (const r of shipRows) {
+      const t = Number(r.total) || 0, p = Number(r.paid_amount) || 0;
+      if (r.paid_at) shipCollected += p;
+      else { shipOutstanding += +(t - p).toFixed(2); shipUnpaid++; }
+    }
+
+    S.summaryData = {
+      app_owed: appOwed, app_collected: appCollected,
+      app_unpaid_count: appUnpaid, app_customers: appRows.length,
+      ship_outstanding: shipOutstanding, ship_collected: shipCollected,
+      ship_unpaid_count: shipUnpaid, ship_clients: shipRows.length,
+      received_count: rcvRes.count || 0,
+    };
+  } catch (e) {
+    toast("Could not load summary — " + (e.message || "try again"), "bad");
+    S.summaryData = {};
+  }
+  render();
+}
+
+function exportSummary() {
+  const sd = S.summaryData;
+  if (!sd) { toast("Nothing to export.", "bad"); return; }
+  const rows = [
+    ["Category", "Outstanding (USD)", "Collected (USD)", "Count"],
+    ["App clients", sd.app_owed, sd.app_collected, sd.app_unpaid_count],
+    ["Shipping clients", sd.ship_outstanding, sd.ship_collected, sd.ship_unpaid_count],
+    ["Total", (Number(sd.app_owed) || 0) + (Number(sd.ship_outstanding) || 0),
+     (Number(sd.app_collected) || 0) + (Number(sd.ship_collected) || 0), ""],
+    ["", "", "", ""],
+    ["Received in Lebanon", sd.received_count, "", ""],
+  ];
+  const csv = rows.map(r => r.map(csvCell).join(",")).join("\n");
+  const name = "summary-" + (S.summaryDate || new Date().toISOString().slice(0, 10)) + ".csv";
+  if (offerFile(name, csv)) toast("Summary exported", "ok");
+  else toast("The browser would not save the file.", "bad");
+}
+
+/* ------------------------------------------------------------- waseet --- */
+function vWaseet() {
+  const v = el("section");
+  const head = el("div", "vhead");
+  const h = el("div");
+  h.append(el("h2", null, "Waseet"));
+  h.append(el("div", "sub", "Cash-on-delivery parcels with Waseet. " +
+    "When a parcel is released (sent to Waseet), it appears here with the money they owe you."));
+  head.append(h);
+  v.append(head);
+
+  /* date filter + export */
+  const toolRow = el("div", "row");
+  toolRow.style.marginBottom = "14px"; toolRow.style.gap = "8px"; toolRow.style.flexWrap = "wrap";
+  const dateInp = el("input", "inp");
+  dateInp.type = "date"; dateInp.value = S.waseetDate;
+  dateInp.style.width = "auto";
+  dateInp.onchange = () => { S.waseetDate = dateInp.value; loadWaseet(); };
+  toolRow.append(dateInp);
+  if (S.waseetDate) {
+    const dc = el("button", "btn", "Clear date");
+    dc.onclick = () => { S.waseetDate = ""; loadWaseet(); };
+    toolRow.append(dc);
+  }
+  const sortSel = el("select", "inp");
+  sortSel.style.width = "auto";
+  sortSel.innerHTML = '<option value="desc">Amount: high→low</option><option value="asc">Amount: low→high</option>';
+  sortSel.value = S.waseetSort;
+  sortSel.onchange = () => { S.waseetSort = sortSel.value; loadWaseet(); };
+  toolRow.append(sortSel);
+  const expBtn = el("button", "btn", "Export");
+  expBtn.onclick = () => exportWaseet();
+  toolRow.append(expBtn);
+  v.append(toolRow);
+
+  if (!S.waseetData) {
+    const e = el("div", "empty");
+    e.append(el("span", "spin"));
+    e.append(el("div", null, "Loading Waseet data…"));
+    v.append(e);
+    return v;
+  }
+
+  const rows = S.waseetData;
+  if (!rows.length) {
+    const e = el("div", "empty");
+    e.append(el("b", null, "No parcels with Waseet"));
+    e.append(document.createTextNode("Release parcels to send them to Waseet for cash-on-delivery."));
+    v.append(e);
+    return v;
+  }
+
+  /* totals */
+  let totalOwed = 0, totalPaid = 0, count = 0;
+  for (const r of rows) {
+    const c = Number(r.cost) || 0;
+    if (!r.paid) totalOwed += c;
+    else totalPaid += c;
+    count++;
+  }
+
+  const tiles = el("div", "tiles");
+  const tile = (k, val, note, colour) => {
+    const d = el("div", "tile");
+    d.append(el("div", "k", k));
+    const b = el("div", "v", val);
+    if (colour) b.style.color = colour;
+    d.append(b);
+    if (note) d.append(el("div", "n", note));
+    return d;
+  };
+  tiles.append(
+    tile("Waseet owes you", money(totalOwed), nf0.format(count) + " parcels out", "var(--danger)"),
+    tile("Collected from Waseet", money(totalPaid), "already paid back", "var(--ok)"),
+    tile("Total with Waseet", nf0.format(rows.length), "parcels released"),
+  );
+  v.append(tiles);
+
+  /* parcel list */
+  const list = el("div", "list");
+  for (const r of rows) {
+    const li = el("div", "li");
+    const m = el("div", "li-m");
+    const nm = el("div", "li-nm");
+    nm.append(el("span", "mono", r.barcode));
+    nm.append(el("span", "chip " + (r.paid ? "s-delivered" : "off"), r.paid ? "Paid" : "Unpaid"));
+    m.append(nm);
+    const bits = [];
+    if (r.customer) bits.push(r.customer);
+    if (r.client_id) bits.push("(" + r.client_id + ")");
+    if (r.phone) bits.push(r.phone);
+    m.append(el("div", "li-s", bits.join("  ·  ")));
+    li.append(m);
+    const a = el("div", "li-a");
+    const cost = Number(r.cost) || 0;
+    const c = el("span", "mono num", money(cost));
+    c.style.fontWeight = "600";
+    if (!r.paid) c.style.color = "var(--danger)";
+    a.append(c);
+    li.append(a);
+    list.append(li);
+  }
+  v.append(list);
+  return v;
+}
+
+async function loadWaseet() {
+  S.waseetData = null; render();
+  let qy = S.sb.from("parcels_view")
+    .select("barcode,name,client_id,customer,phone,cost,paid,status,updated_at")
+    .eq("status", "released");
+  if (S.waseetDate) qy = qy.eq("shipped_at", S.waseetDate);
+  qy = qy.order("cost", { ascending: S.waseetSort === "asc" });
+  const { data, error } = await qy.limit(500);
+  if (error) { toast(error.message, "bad"); S.waseetData = []; render(); return; }
+  S.waseetData = data || [];
+  render();
+}
+
+function exportWaseet() {
+  if (!S.waseetData || !S.waseetData.length) { toast("Nothing to export.", "bad"); return; }
+  const cols = ["barcode", "customer", "client_id", "phone", "cost", "paid"];
+  const HEAD = { barcode: "Barcode", customer: "Customer", client_id: "Client #",
+    phone: "Phone", cost: "Amount (USD)", paid: "Paid" };
+  const csv = [cols.map(c => csvCell(HEAD[c] || c)).join(",")]
+    .concat(S.waseetData.map(r => cols.map(c => csvCell(r[c])).join(",")))
+    .join("\n");
+  const name = "waseet-" + (S.waseetDate || new Date().toISOString().slice(0, 10)) + ".csv";
+  if (offerFile(name, csv)) toast(nf0.format(S.waseetData.length) + " rows exported", "ok");
+  else toast("The browser would not save the file.", "bad");
 }
 
 /* ----------------------------------------------------------------- setup --- */
@@ -4880,6 +5251,8 @@ function render() {
              : S.tab === "setup" && sees_money() ? vSetup()
              : S.tab === "shipping" && sees_money() ? vShipping()
              : S.tab === "money" && sees_money() ? vMoney()
+             : S.tab === "summary" && sees_money() ? vSummary()
+             : S.tab === "waseet" && sees_money() ? vWaseet()
              : S.tab === "labels" ? vLabels()
              : S.tab === "stock" ? vStock()
              : S.tab === "zones" ? vZones()
