@@ -486,6 +486,7 @@ const S = {
 
   /* waseet */
   waseetData: null,
+  waseetShips: null,
   waseetDate: "",
   waseetSort: "desc",
   waseetSel: new Set(),
@@ -3374,6 +3375,15 @@ function shipmentRow(r) {
     const d = el("button", "btn sm", "Delivered");
     d.onclick = () => markShipment(r, { delivered: true });
     a.append(d);
+    if (r.delivery_to === "waseet") {
+      a.append(el("span", "chip s-released", "With Waseet"));
+    } else {
+      const w = el("button", "btn sm", "→ Waseet");
+      w.style.background = "var(--accent, #8e44ad)"; w.style.color = "#fff";
+      w.style.borderColor = "var(--accent, #8e44ad)";
+      w.onclick = () => sendShipToWaseet(r);
+      a.append(w);
+    }
   } else {
     a.append(el("span", "li-s", "delivered " + fmtDate(r.delivered_at)));
   }
@@ -3391,6 +3401,15 @@ async function markShipment(r, what) {
   if (error) { toast(error.message, "bad"); return; }
   if (!data || !data.length) { toast("Nothing changed — the office handles this.", "bad"); return; }
   toast(what.paid ? "Marked paid · " + money(r.total) : "Marked delivered", "ok");
+  loadShipments(); loadShipStats();
+}
+
+async function sendShipToWaseet(r) {
+  const { error } = await S.sb.from("shipments")
+    .update({ delivery_to: "waseet" })
+    .eq("ship_num", r.ship_num);
+  if (error) { toast(error.message, "bad"); return; }
+  toast("Shipment #" + r.ship_num + " sent to Waseet for delivery", "ok");
   loadShipments(); loadShipStats();
 }
 
@@ -3700,7 +3719,7 @@ function vWaseet() {
   toolRow.append(expBtn);
   v.append(toolRow);
 
-  if (!S.waseetData) {
+  if (!S.waseetData || !S.waseetShips) {
     const e = el("div", "empty");
     e.append(el("span", "spin"));
     e.append(el("div", null, "Loading Waseet data…"));
@@ -3709,10 +3728,11 @@ function vWaseet() {
   }
 
   const rows = S.waseetData;
-  if (!rows.length) {
+  const wShips = S.waseetShips || [];
+  if (!rows.length && !wShips.length) {
     const e = el("div", "empty");
-    e.append(el("b", null, "No parcels with Waseet"));
-    e.append(document.createTextNode("Release parcels to send them to Waseet for cash-on-delivery."));
+    e.append(el("b", null, "Nothing with Waseet"));
+    e.append(document.createTextNode("Release parcels or send shipments to Waseet for delivery."));
     v.append(e);
     return v;
   }
@@ -3724,6 +3744,13 @@ function vWaseet() {
     const c = Number(r.cost) || 0;
     if (!r.paid) { totalOwed += c; unpaidCount++; }
     else totalPaid += c;
+  }
+  let shipOwed = 0, shipPaidAmt = 0, shipUnpaid = 0;
+  for (const s of wShips) {
+    const t = Number(s.total) || 0, p = Number(s.paid_amount) || 0;
+    const owed = +(t - p).toFixed(2);
+    if (!s.paid_at || owed > 0) { shipOwed += owed > 0 ? owed : t; shipUnpaid++; }
+    else shipPaidAmt += t;
   }
 
   const tiles = el("div", "tiles");
@@ -3737,9 +3764,11 @@ function vWaseet() {
     return d;
   };
   tiles.append(
-    tile("Collect from Waseet", money(totalOwed), nf0.format(unpaidCount) + " COD parcels", "var(--danger)"),
-    tile("Already paid direct", money(totalPaid), "client paid — not with Waseet", "var(--ok)"),
-    tile("Total with Waseet", nf0.format(rows.length), "parcels released"),
+    tile("Collect from Waseet", money(totalOwed + shipOwed),
+      nf0.format(unpaidCount) + " parcels + " + nf0.format(shipUnpaid) + " shipments", "var(--danger)"),
+    tile("Already paid direct", money(totalPaid + shipPaidAmt), "client paid — not with Waseet", "var(--ok)"),
+    tile("Total with Waseet", nf0.format(rows.length + wShips.length),
+      nf0.format(rows.length) + " parcels · " + nf0.format(wShips.length) + " shipments"),
   );
   v.append(tiles);
 
@@ -3810,25 +3839,93 @@ function vWaseet() {
     list.append(li);
   }
   v.append(list);
+
+  /* shipping items sent to Waseet */
+  if (wShips.length) {
+    v.append(el("h3", null, "Shipping with Waseet"));
+    const sList = el("div", "list");
+    for (const s of wShips) {
+      const li = el("div", "li");
+      const m = el("div", "li-m");
+      const nm = el("div", "li-nm");
+      nm.append(el("span", null, s.client || s.code || "—"));
+      nm.append(el("span", "chip office", "Shipping #" + s.ship_num));
+      nm.append(el("span", "chip " + (s.mode === "sea" ? "office" : "scanner"),
+        s.mode === "sea" ? "Sea" : "Air"));
+      if (s.paid_at) nm.append(el("span", "chip s-delivered", "Paid"));
+      else nm.append(el("span", "chip off", "Unpaid"));
+      m.append(nm);
+      const bits = [];
+      if (s.phone) bits.push(s.phone);
+      if (s.arrived_at) bits.push("arrived " + fmtDate(s.arrived_at));
+      if (bits.length) m.append(el("div", "li-s", bits.join("  ·  ")));
+      li.append(m);
+      const a = el("div", "li-a");
+      const total = Number(s.total) || 0;
+      const c = el("span", "mono num", money(total));
+      c.style.fontWeight = "600";
+      if (!s.paid_at) c.style.color = "var(--danger)";
+      a.append(c);
+      const rb = el("button", "btn sm", "Return");
+      rb.style.fontSize = "11px";
+      rb.onclick = async () => {
+        const { error } = await S.sb.from("shipments")
+          .update({ delivery_to: null }).eq("ship_num", s.ship_num);
+        if (error) { toast(error.message, "bad"); return; }
+        toast("Shipment #" + s.ship_num + " removed from Waseet", "ok");
+        loadWaseet();
+      };
+      a.append(rb);
+      const db = el("button", "btn sm pri", "Delivered");
+      db.style.fontSize = "11px";
+      db.onclick = async () => {
+        const today = new Date().toISOString().slice(0, 10);
+        const { error } = await S.sb.from("shipments")
+          .update({ delivered_at: today }).eq("ship_num", s.ship_num);
+        if (error) { toast(error.message, "bad"); return; }
+        toast("Shipment #" + s.ship_num + " marked delivered", "ok");
+        loadWaseet();
+      };
+      a.append(db);
+      li.append(a);
+      sList.append(li);
+    }
+    v.append(sList);
+  }
+
   return v;
 }
 
 async function loadWaseet() {
-  S.waseetData = null; render();
+  S.waseetData = null; S.waseetShips = null; render();
+  const wTerm = S.waseetQ.trim();
+  const wLike = wTerm ? "%" + wTerm.replace(/[%,()]/g, " ") + "%" : null;
+
   let qy = S.sb.from("parcels_view")
     .select("barcode,name,client_id,customer,phone,cost,paid,status,updated_at")
     .eq("status", "released");
   if (S.waseetDate) qy = qy.eq("shipped_at", S.waseetDate);
-  const wTerm = S.waseetQ.trim();
-  if (wTerm) {
-    const wLike = "%" + wTerm.replace(/[%,()]/g, " ") + "%";
+  if (wLike) {
     qy = qy.or(["phone.ilike." + wLike, "barcode.ilike." + wLike,
                  "client_id.ilike." + wLike, "customer.ilike." + wLike].join(","));
   }
   qy = qy.order("cost", { ascending: S.waseetSort === "asc" });
-  const { data, error } = await qy.limit(500);
-  if (error) { toast(error.message, "bad"); S.waseetData = []; render(); return; }
-  S.waseetData = data || [];
+
+  let sq = S.sb.from("shipments")
+    .select("ship_num,code,client,mode,total,paid_at,paid_amount,delivered_at,arrived_at,phone")
+    .eq("delivery_to", "waseet").is("delivered_at", null);
+  if (S.waseetDate) sq = sq.eq("arrived_at", S.waseetDate);
+  if (wLike) {
+    sq = sq.or(["client.ilike." + wLike, "code.ilike." + wLike,
+                "ship_num::text.ilike." + wLike].join(","));
+  }
+  sq = sq.order("total", { ascending: S.waseetSort === "asc" });
+
+  const [pRes, sRes] = await Promise.all([qy.limit(500), sq.limit(200)]);
+  if (pRes.error) { toast(pRes.error.message, "bad"); S.waseetData = []; S.waseetShips = []; render(); return; }
+  if (sRes.error) { toast(sRes.error.message, "bad"); }
+  S.waseetData = pRes.data || [];
+  S.waseetShips = sRes.data || [];
   render();
 }
 
