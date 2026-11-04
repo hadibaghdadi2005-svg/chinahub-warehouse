@@ -84,12 +84,16 @@ button{cursor:pointer}
 .lbl-sel{position:absolute;top:10px;left:10px;width:24px;height:24px;accent-color:var(--primary);cursor:pointer}
 .lbl-card.lbl-card-a5{position:relative}
 .lbl-card-a5.lbl-unsel{opacity:.35}
-.lbl-details{display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;margin:12px 0 16px;width:100%;max-width:420px}
-.lbl-detail{display:flex;flex-direction:column;align-items:center;padding:8px 0}
-.lbl-detail-label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--fg-faint);font-weight:600;margin-bottom:2px}
-.lbl-detail-val{font-size:18px;font-weight:700;font-family:var(--mono)}
+.lbl-details{display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;margin:8px 0 10px}
+.lbl-detail{display:flex;flex-direction:column;padding:4px 0}
+.lbl-detail-label{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--fg-faint);font-weight:600;margin-bottom:1px}
+.lbl-detail-val{font-size:13px;font-weight:700;font-family:var(--mono)}
+.lbl-card-a5 .lbl-details{gap:6px 16px;margin:12px 0 16px}
+.lbl-card-a5 .lbl-detail-label{font-size:11px}
+.lbl-card-a5 .lbl-detail-val{font-size:18px}
+.lbl-card-a5 .lbl-detail{align-items:center;padding:8px 0}
 .lbl-grid.lbl-a5{grid-template-columns:1fr;gap:24px;max-width:600px;margin:0 auto}
-.lbl-card{background:var(--surface);border:2px dashed var(--line);border-radius:var(--r);padding:16px;page-break-inside:avoid;break-inside:avoid}
+.lbl-card{background:var(--surface);border:2px dashed var(--line);border-radius:var(--r);padding:16px;page-break-inside:avoid;break-inside:avoid;position:relative}
 .lbl-card.lbl-card-a5{padding:32px 28px;min-height:400px;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center}
 .lbl-card-a5 .lbl-top{flex-direction:column;gap:10px;margin-bottom:16px}
 .lbl-card-a5 .lbl-code{font-size:42px;letter-spacing:.06em}
@@ -117,7 +121,7 @@ button{cursor:pointer}
   .lbl-card-a5 .lbl-name{font-size:32px;color:#000}
   .lbl-card-a5 .lbl-info{font-size:18px;color:#555}
   .lbl-card-a5 .lbl-cut{font-size:14px;color:#999;border-color:#ccc}
-  .lbl-card-a5.lbl-unsel{display:none!important}
+  .lbl-unsel{display:none!important}
   .lbl-sel{display:none!important}
   .lbl-toolbar{display:none!important}
   .lbl-detail-label{color:#777}
@@ -2155,10 +2159,10 @@ function vLabelShipments() {
   toolbar.append(selAll, selNone, printBtn, count);
   f.append(toolbar);
 
-  const g = el("div", "lbl-grid lbl-a5");
+  const g = el("div", "lbl-grid");
   for (const s of S.labelShips) {
     const sel = S.selectedShips.has(s.ship_num);
-    const card = el("div", "lbl-card lbl-card-a5" + (S.selectedShips.size > 0 && !sel ? " lbl-unsel" : ""));
+    const card = el("div", "lbl-card" + (S.selectedShips.size > 0 && !sel ? " lbl-unsel" : ""));
     const cb = document.createElement("input");
     cb.type = "checkbox";
     cb.className = "lbl-sel";
@@ -2208,9 +2212,9 @@ function vLabelShipments() {
       if (!svgEl) continue;
       try {
         JsBarcode("#sbc-" + s.ship_num, "SHIP-" + s.ship_num, {
-          format: "CODE128", width: 4, height: 120, displayValue: true,
-          text: "SHIP-" + s.ship_num, fontSize: 22, font: "IBM Plex Mono, monospace",
-          textMargin: 8, margin: 8, lineColor: fg
+          format: "CODE128", width: 2, height: 55, displayValue: true,
+          text: "SHIP-" + s.ship_num, fontSize: 12, font: "IBM Plex Mono, monospace",
+          textMargin: 5, margin: 4, lineColor: fg
         });
       } catch (_) {}
     }
