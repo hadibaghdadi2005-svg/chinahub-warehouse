@@ -84,6 +84,10 @@ button{cursor:pointer}
 .lbl-sel{position:absolute;top:10px;left:10px;width:24px;height:24px;accent-color:var(--primary);cursor:pointer}
 .lbl-card.lbl-card-a5{position:relative}
 .lbl-card-a5.lbl-unsel{opacity:.35}
+.lbl-details{display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;margin:12px 0 16px;width:100%;max-width:420px}
+.lbl-detail{display:flex;flex-direction:column;align-items:center;padding:8px 0}
+.lbl-detail-label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--fg-faint);font-weight:600;margin-bottom:2px}
+.lbl-detail-val{font-size:18px;font-weight:700;font-family:var(--mono)}
 .lbl-grid.lbl-a5{grid-template-columns:1fr;gap:24px;max-width:600px;margin:0 auto}
 .lbl-card{background:var(--surface);border:2px dashed var(--line);border-radius:var(--r);padding:16px;page-break-inside:avoid;break-inside:avoid}
 .lbl-card.lbl-card-a5{padding:32px 28px;min-height:400px;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center}
@@ -116,6 +120,8 @@ button{cursor:pointer}
   .lbl-card-a5.lbl-unsel{display:none!important}
   .lbl-sel{display:none!important}
   .lbl-toolbar{display:none!important}
+  .lbl-detail-label{color:#777}
+  .lbl-detail-val{color:#000}
   .lbl-code,.lbl-name{color:#000}
   .lbl-info{color:#555}
   .lbl-cut{color:#999;border-color:#ccc}
@@ -474,6 +480,7 @@ const S = {
   labelTab: "zones",
   labelShips: null,
   selectedZones: new Set(),
+  selectedShips: new Set(),
 
   /* setup */
   brand: null,         /* what the warehouse is called, per the database */
@@ -2136,22 +2143,54 @@ function vLabelShipments() {
     return f;
   }
 
-  const g = el("div", "lbl-grid");
+  const toolbar = el("div", "lbl-toolbar");
+  const selAll = el("button", null, "Select All");
+  selAll.onclick = () => { S.labelShips.forEach(s => S.selectedShips.add(s.ship_num)); render(); };
+  const selNone = el("button", null, "Clear");
+  selNone.onclick = () => { S.selectedShips.clear(); render(); };
+  const printBtn = el("button", "primary", "Print Selected");
+  printBtn.disabled = S.selectedShips.size === 0;
+  printBtn.onclick = () => window.print();
+  const count = el("span", "lbl-count", S.selectedShips.size + " of " + S.labelShips.length + " selected");
+  toolbar.append(selAll, selNone, printBtn, count);
+  f.append(toolbar);
+
+  const g = el("div", "lbl-grid lbl-a5");
   for (const s of S.labelShips) {
-    const card = el("div", "lbl-card");
+    const sel = S.selectedShips.has(s.ship_num);
+    const card = el("div", "lbl-card lbl-card-a5" + (S.selectedShips.size > 0 && !sel ? " lbl-unsel" : ""));
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.className = "lbl-sel";
+    cb.checked = sel;
+    cb.onchange = () => { if (cb.checked) S.selectedShips.add(s.ship_num); else S.selectedShips.delete(s.ship_num); render(); };
+    card.append(cb);
+
     const top = el("div", "lbl-top");
     top.append(el("span", "lbl-code", "#" + s.ship_num));
     if (s.mode) {
-      const chip = el("span", "lbl-chip " + s.mode, s.mode);
+      const chip = el("span", "lbl-chip " + s.mode, s.mode.toUpperCase());
       top.append(chip);
     }
     card.append(top);
     card.append(el("div", "lbl-name", s.client || s.code || "—"));
-    const info = [];
-    if (s.goods) info.push(s.goods);
-    if (s.weight_kg) info.push(s.weight_kg + " kg");
-    if (s.volume_cbm) info.push(s.volume_cbm + " CBM");
-    if (info.length) card.append(el("div", "lbl-info", info.join(" · ")));
+
+    const details = el("div", "lbl-details");
+    function addDetail(label, val) {
+      const d = el("div", "lbl-detail");
+      d.append(el("span", "lbl-detail-label", label));
+      d.append(el("span", "lbl-detail-val", val || "—"));
+      details.append(d);
+    }
+    addDetail("Phone", s.phone || "—");
+    addDetail("Cartons", s.boxes != null ? String(s.boxes) : "—");
+    addDetail("Received", s.arrived_at || "—");
+    if (s.mode === "sea") {
+      addDetail("CBM", s.volume_cbm ? Number(s.volume_cbm).toFixed(3) + " m³" : "—");
+    } else {
+      addDetail("Weight", s.weight_kg ? Number(s.weight_kg).toFixed(1) + " kg" : "—");
+    }
+    card.append(details);
 
     const bcVal = "SHIP-" + s.ship_num;
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -2169,9 +2208,9 @@ function vLabelShipments() {
       if (!svgEl) continue;
       try {
         JsBarcode("#sbc-" + s.ship_num, "SHIP-" + s.ship_num, {
-          format: "CODE128", width: 2, height: 50, displayValue: true,
-          text: "SHIP-" + s.ship_num, fontSize: 12, font: "IBM Plex Mono, monospace",
-          textMargin: 5, margin: 4, lineColor: fg
+          format: "CODE128", width: 4, height: 120, displayValue: true,
+          text: "SHIP-" + s.ship_num, fontSize: 22, font: "IBM Plex Mono, monospace",
+          textMargin: 8, margin: 8, lineColor: fg
         });
       } catch (_) {}
     }
@@ -2182,7 +2221,7 @@ function vLabelShipments() {
 async function loadLabelShipments() {
   S.labelShips = null; render();
   const { data, error } = await S.sb.from("shipments")
-    .select("ship_num,code,client,mode,goods,weight_kg,volume_cbm")
+    .select("ship_num,code,client,mode,goods,weight_kg,volume_cbm,boxes,arrived_at,phone")
     .order("ship_num", { ascending: false }).limit(200);
   if (error) { toast("Could not load shipments — " + error.message, "bad"); S.labelShips = []; render(); return; }
   S.labelShips = data || [];
