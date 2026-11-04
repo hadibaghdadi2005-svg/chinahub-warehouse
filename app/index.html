@@ -3624,13 +3624,13 @@ function vWaseet() {
     return v;
   }
 
-  /* totals */
-  let totalOwed = 0, totalPaid = 0, count = 0;
+  /* totals — only count unpaid parcels in the Waseet balance;
+     parcels whose client already paid the warehouse are not owed by Waseet */
+  let totalOwed = 0, totalPaid = 0, unpaidCount = 0;
   for (const r of rows) {
     const c = Number(r.cost) || 0;
-    if (!r.paid) totalOwed += c;
+    if (!r.paid) { totalOwed += c; unpaidCount++; }
     else totalPaid += c;
-    count++;
   }
 
   const tiles = el("div", "tiles");
@@ -3644,8 +3644,8 @@ function vWaseet() {
     return d;
   };
   tiles.append(
-    tile("Waseet owes you", money(totalOwed), nf0.format(count) + " parcels out", "var(--danger)"),
-    tile("Collected from Waseet", money(totalPaid), "already paid back", "var(--ok)"),
+    tile("Waseet owes you", money(totalOwed), nf0.format(unpaidCount) + " unpaid parcels", "var(--danger)"),
+    tile("Already paid by client", money(totalPaid), "not owed by Waseet", "var(--ok)"),
     tile("Total with Waseet", nf0.format(rows.length), "parcels released"),
   );
   v.append(tiles);
