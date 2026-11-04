@@ -489,6 +489,7 @@ const S = {
   waseetDate: "",
   waseetSort: "desc",
   waseetSel: new Set(),
+  waseetQ: "",
 
   /* money date filter */
   moneyDate: "",
@@ -496,6 +497,7 @@ const S = {
   /* shipping date filter + sort */
   shipDate: "",
   shipSort: "",
+  shipSel: new Set(),
 
   /* labels */
   labelTab: "zones",
@@ -3288,6 +3290,33 @@ function vShipping() {
     return v;
   }
 
+  /* select all / bulk actions */
+  const selBar = el("div", "row");
+  selBar.style.marginBottom = "8px"; selBar.style.gap = "8px"; selBar.style.alignItems = "center";
+  const allCb = document.createElement("input");
+  allCb.type = "checkbox";
+  allCb.checked = S.ships.length > 0 && S.ships.every(r => S.shipSel.has(r.ship_num));
+  allCb.onchange = () => {
+    if (allCb.checked) S.ships.forEach(r => S.shipSel.add(r.ship_num));
+    else S.shipSel.clear();
+    render();
+  };
+  selBar.append(allCb);
+  selBar.append(el("span", "li-s", S.shipSel.size
+    ? S.shipSel.size + " selected"
+    : "Select all"));
+  if (S.shipSel.size) {
+    const bulkDel = el("button", "btn sm pri", "Mark delivered");
+    bulkDel.onclick = () => shipBulkDelivered();
+    selBar.append(bulkDel);
+    const bulkPaid = el("button", "btn sm", "Mark paid");
+    bulkPaid.style.background = "var(--ok)"; bulkPaid.style.color = "#fff";
+    bulkPaid.style.borderColor = "var(--ok)";
+    bulkPaid.onclick = () => shipBulkPaid();
+    selBar.append(bulkPaid);
+  }
+  v.append(selBar);
+
   const list = el("div", "list");
   for (const r of S.ships) list.append(shipmentRow(r));
   v.append(list);
@@ -3296,6 +3325,16 @@ function vShipping() {
 
 function shipmentRow(r) {
   const li = el("div", "li");
+  const cb = document.createElement("input");
+  cb.type = "checkbox";
+  cb.checked = S.shipSel.has(r.ship_num);
+  cb.style.marginRight = "10px"; cb.style.flexShrink = "0";
+  cb.onchange = () => {
+    if (cb.checked) S.shipSel.add(r.ship_num);
+    else S.shipSel.delete(r.ship_num);
+    render();
+  };
+  li.append(cb);
   const m = el("div", "li-m");
   const nm = el("div", "li-nm");
   nm.append(el("span", null, r.client || r.code || "—"));
@@ -3352,6 +3391,35 @@ async function markShipment(r, what) {
   if (error) { toast(error.message, "bad"); return; }
   if (!data || !data.length) { toast("Nothing changed — the office handles this.", "bad"); return; }
   toast(what.paid ? "Marked paid · " + money(r.total) : "Marked delivered", "ok");
+  loadShipments(); loadShipStats();
+}
+
+async function shipBulkDelivered() {
+  const nums = [...S.shipSel];
+  if (!nums.length) return;
+  const today = new Date().toISOString().slice(0, 10);
+  const { error } = await S.sb.from("shipments")
+    .update({ delivered_at: today })
+    .in("ship_num", nums);
+  if (error) { toast(error.message, "bad"); return; }
+  toast(nf0.format(nums.length) + " shipments marked delivered", "ok");
+  S.shipSel.clear();
+  loadShipments(); loadShipStats();
+}
+
+async function shipBulkPaid() {
+  const nums = [...S.shipSel];
+  if (!nums.length) return;
+  const today = new Date().toISOString().slice(0, 10);
+  const matched = S.ships.filter(r => S.shipSel.has(r.ship_num));
+  const updates = matched.map(r => S.sb.from("shipments")
+    .update({ paid_at: today, paid_amount: Number(r.total) || 0 })
+    .eq("ship_num", r.ship_num));
+  const results = await Promise.all(updates);
+  const errs = results.filter(r => r.error);
+  if (errs.length) { toast(errs[0].error.message, "bad"); return; }
+  toast(nf0.format(nums.length) + " shipments marked paid", "ok");
+  S.shipSel.clear();
   loadShipments(); loadShipStats();
 }
 
@@ -3583,6 +3651,31 @@ function vWaseet() {
   head.append(h);
   v.append(head);
 
+  /* search bar */
+  const searchBar = el("form", "row");
+  searchBar.style.marginBottom = "14px";
+  const wq = el("input", "inp");
+  wq.placeholder = "Phone, barcode, client ID or name…";
+  wq.value = S.waseetQ;
+  wq.autocomplete = "off";
+  wq.style.flex = "1 1 240px";
+  searchBar.append(wq);
+  const wgo = el("button", "btn pri", "Search");
+  wgo.type = "submit";
+  searchBar.append(wgo);
+  if (S.waseetQ.trim()) {
+    const wclr = el("button", "btn", "Clear");
+    wclr.type = "button";
+    wclr.onclick = () => { S.waseetQ = ""; loadWaseet(); };
+    searchBar.append(wclr);
+  }
+  searchBar.addEventListener("submit", ev => {
+    ev.preventDefault();
+    S.waseetQ = wq.value;
+    loadWaseet();
+  });
+  v.append(searchBar);
+
   /* date filter + export */
   const toolRow = el("div", "row");
   toolRow.style.marginBottom = "14px"; toolRow.style.gap = "8px"; toolRow.style.flexWrap = "wrap";
@@ -3726,6 +3819,12 @@ async function loadWaseet() {
     .select("barcode,name,client_id,customer,phone,cost,paid,status,updated_at")
     .eq("status", "released");
   if (S.waseetDate) qy = qy.eq("shipped_at", S.waseetDate);
+  const wTerm = S.waseetQ.trim();
+  if (wTerm) {
+    const wLike = "%" + wTerm.replace(/[%,()]/g, " ") + "%";
+    qy = qy.or(["phone.ilike." + wLike, "barcode.ilike." + wLike,
+                 "client_id.ilike." + wLike, "customer.ilike." + wLike].join(","));
+  }
   qy = qy.order("cost", { ascending: S.waseetSort === "asc" });
   const { data, error } = await qy.limit(500);
   if (error) { toast(error.message, "bad"); S.waseetData = []; render(); return; }
@@ -5378,7 +5477,7 @@ async function boot() {
       S.cfgDraft = null; S.laneCover = null;
       S.brand = null;
       S.ships = null; S.shipStats = null; S.shipQ = "";
-      S.shipFilters = { mode: "", paid: "" };
+      S.shipFilters = { mode: "", paid: "" }; S.shipSel = new Set();
       if (S.session) await loadMe();
       render();
       if (S.me) { loadBrand(); loadZones(); loadStats(); }
