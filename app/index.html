@@ -488,6 +488,7 @@ const S = {
   waseetData: null,
   waseetDate: "",
   waseetSort: "desc",
+  waseetSel: new Set(),
 
   /* money date filter */
   moneyDate: "",
@@ -3649,10 +3650,47 @@ function vWaseet() {
   );
   v.append(tiles);
 
+  /* select all / clear */
+  const selBar = el("div", "row");
+  selBar.style.marginBottom = "8px"; selBar.style.gap = "8px"; selBar.style.alignItems = "center";
+  const allCb = document.createElement("input");
+  allCb.type = "checkbox";
+  allCb.checked = rows.length > 0 && rows.every(r => S.waseetSel.has(r.barcode));
+  allCb.onchange = () => {
+    if (allCb.checked) rows.forEach(r => S.waseetSel.add(r.barcode));
+    else S.waseetSel.clear();
+    render();
+  };
+  selBar.append(allCb);
+  selBar.append(el("span", "li-s", S.waseetSel.size
+    ? S.waseetSel.size + " selected"
+    : "Select all"));
+  if (S.waseetSel.size) {
+    const delBtn = el("button", "btn sm", "Remove selected");
+    delBtn.style.background = "var(--danger)"; delBtn.style.color = "#fff";
+    delBtn.style.borderColor = "var(--danger)";
+    delBtn.onclick = () => waseetRemoveSelected();
+    selBar.append(delBtn);
+    const markPaid = el("button", "btn sm pri", "Mark paid");
+    markPaid.onclick = () => waseetMarkPaid();
+    selBar.append(markPaid);
+  }
+  v.append(selBar);
+
   /* parcel list */
   const list = el("div", "list");
   for (const r of rows) {
     const li = el("div", "li");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = S.waseetSel.has(r.barcode);
+    cb.style.marginRight = "10px"; cb.style.flexShrink = "0";
+    cb.onchange = () => {
+      if (cb.checked) S.waseetSel.add(r.barcode);
+      else S.waseetSel.delete(r.barcode);
+      render();
+    };
+    li.append(cb);
     const m = el("div", "li-m");
     const nm = el("div", "li-nm");
     nm.append(el("span", "mono", r.barcode));
@@ -3688,6 +3726,31 @@ async function loadWaseet() {
   if (error) { toast(error.message, "bad"); S.waseetData = []; render(); return; }
   S.waseetData = data || [];
   render();
+}
+
+async function waseetRemoveSelected() {
+  const codes = [...S.waseetSel];
+  if (!codes.length) return;
+  const today = new Date().toISOString().slice(0, 10);
+  const { error } = await S.sb.from("parcels")
+    .update({ status: "delivered", delivered_at: today + "T00:00:00Z" })
+    .in("barcode", codes);
+  if (error) { toast(error.message, "bad"); return; }
+  toast(nf0.format(codes.length) + " marked delivered and removed from Waseet", "ok");
+  S.waseetSel.clear();
+  loadWaseet();
+}
+
+async function waseetMarkPaid() {
+  const codes = [...S.waseetSel];
+  if (!codes.length) return;
+  const { error } = await S.sb.from("parcels")
+    .update({ paid: true })
+    .in("barcode", codes);
+  if (error) { toast(error.message, "bad"); return; }
+  toast(nf0.format(codes.length) + " marked paid", "ok");
+  S.waseetSel.clear();
+  loadWaseet();
 }
 
 function exportWaseet() {
