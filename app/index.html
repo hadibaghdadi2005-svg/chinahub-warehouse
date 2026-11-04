@@ -3579,7 +3579,7 @@ function vWaseet() {
   const h = el("div");
   h.append(el("h2", null, "Waseet"));
   h.append(el("div", "sub", "Cash-on-delivery parcels with Waseet. " +
-    "When a parcel is released (sent to Waseet), it appears here with the money they owe you."));
+    "Waseet takes parcels, delivers them, and collects the shipping cash from clients. You collect that money from Waseet."));
   head.append(h);
   v.append(head);
 
@@ -3644,8 +3644,8 @@ function vWaseet() {
     return d;
   };
   tiles.append(
-    tile("Waseet owes you", money(totalOwed), nf0.format(unpaidCount) + " unpaid parcels", "var(--danger)"),
-    tile("Already paid by client", money(totalPaid), "not owed by Waseet", "var(--ok)"),
+    tile("Collect from Waseet", money(totalOwed), nf0.format(unpaidCount) + " COD parcels", "var(--danger)"),
+    tile("Already paid direct", money(totalPaid), "client paid — not with Waseet", "var(--ok)"),
     tile("Total with Waseet", nf0.format(rows.length), "parcels released"),
   );
   v.append(tiles);
