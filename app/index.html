@@ -1345,7 +1345,8 @@ async function loadCallCenterStock() {
   const term = S.ccQ.trim();
   let qy = S.sb.from("parcels_view")
     .select("barcode,name,client_id,customer,phone,status,zone,shelf,cost,paid,shipped_at,age_days");
-  if (S.ccStatus) qy = qy.eq("status", S.ccStatus);
+  if (S.ccStatus === "in_warehouse") qy = qy.in("status", ["received", "shelved"]);
+  else if (S.ccStatus) qy = qy.eq("status", S.ccStatus);
   if (term) {
     const like = "%" + term.replace(/[%,()]/g, " ") + "%";
     const parts = [
@@ -1399,8 +1400,7 @@ function vCallCenterStock() {
   sf.style.width = "auto";
   sf.innerHTML = '<option value="">All statuses</option>'
     + '<option value="expected">On the way</option>'
-    + '<option value="received">Received</option>'
-    + '<option value="shelved">On shelves</option>'
+    + '<option value="in_warehouse">In warehouse</option>'
     + '<option value="at_branch">At branch</option>'
     + '<option value="released">With Waseet</option>'
     + '<option value="delivered">Delivered</option>';
