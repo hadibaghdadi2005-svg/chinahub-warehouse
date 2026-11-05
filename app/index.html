@@ -3427,6 +3427,10 @@ function shipmentRow(r) {
   a.append(t);
   if (r.paid_at && owed <= 0) {
     a.append(el("span", "chip s-delivered", "Paid"));
+    const ub = el("button", "btn sm", "Mark unpaid");
+    ub.style.fontSize = "11px";
+    ub.onclick = () => markShipment(r, { unpaid: true });
+    a.append(ub);
   } else {
     const o = el("span", "chip off", money(owed) + " due");
     a.append(o);
@@ -3462,12 +3466,13 @@ async function markShipment(r, what) {
   const today = new Date().toISOString().slice(0, 10);
   const patch = {};
   if (what.paid) { patch.paid_at = today; patch.paid_amount = Number(r.total) || 0; }
+  if (what.unpaid) { patch.paid_at = null; patch.paid_amount = 0; }
   if (what.delivered) patch.delivered_at = today;
   const { data, error } = await S.sb.from("shipments")
     .update(patch).eq("ship_num", r.ship_num).select("ship_num");
   if (error) { toast(error.message, "bad"); return; }
   if (!data || !data.length) { toast("Nothing changed — the office handles this.", "bad"); return; }
-  toast(what.paid ? "Marked paid · " + money(r.total) : "Marked delivered", "ok");
+  toast(what.paid ? "Marked paid · " + money(r.total) : what.unpaid ? "Marked unpaid" : "Marked delivered", "ok");
   loadShipments(); loadShipStats();
 }
 
