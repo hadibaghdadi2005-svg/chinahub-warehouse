@@ -3542,8 +3542,10 @@ async function loadShipments() {
   const term = S.shipQ.trim();
   if (term) {
     const like = "%" + term.replace(/[%,()]/g, " ") + "%";
-    qy = qy.or(["client.ilike." + like, "code.ilike." + like,
-                "container.ilike." + like, "ship_num::text.ilike." + like].join(","));
+    const parts = ["client.ilike." + like, "code.ilike." + like,
+                   "container.ilike." + like];
+    if (/^\d+$/.test(term)) parts.push("ship_num.eq." + term);
+    qy = qy.or(parts.join(","));
   }
   if (S.shipSort === "asc") qy = qy.order("total", { ascending: true });
   else if (S.shipSort === "desc") qy = qy.order("total", { ascending: false });
