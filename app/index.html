@@ -516,6 +516,7 @@ const S = {
   ccData: null,        /* [{client_id, parcels: [...], totalCost}] grouped */
   ccOpen: new Set(),   /* expanded client IDs */
   ccSort: "most",      /* "most" | "least" */
+  ccStatus: "",        /* "" = all, or a status value */
   ccQ: "",
   ccLoading: false,
 
@@ -1344,6 +1345,7 @@ async function loadCallCenterStock() {
   const term = S.ccQ.trim();
   let qy = S.sb.from("parcels_view")
     .select("barcode,name,client_id,customer,phone,status,zone,shelf,cost,paid,shipped_at,age_days");
+  if (S.ccStatus) qy = qy.eq("status", S.ccStatus);
   if (term) {
     const like = "%" + term.replace(/[%,()]/g, " ") + "%";
     const parts = [
@@ -1393,6 +1395,19 @@ function vCallCenterStock() {
   q.style.flex = "1 1 240px";
   bar.append(q);
 
+  const sf = el("select", "inp");
+  sf.style.width = "auto";
+  sf.innerHTML = '<option value="">All statuses</option>'
+    + '<option value="expected">On the way</option>'
+    + '<option value="received">Received</option>'
+    + '<option value="shelved">On shelves</option>'
+    + '<option value="at_branch">At branch</option>'
+    + '<option value="released">With Waseet</option>'
+    + '<option value="delivered">Delivered</option>';
+  sf.value = S.ccStatus;
+  sf.onchange = () => { S.ccStatus = sf.value; S.ccData = null; loadCallCenterStock(); };
+  bar.append(sf);
+
   const ss = el("select", "inp");
   ss.style.width = "auto";
   ss.innerHTML = '<option value="most">Most parcels first</option><option value="least">Fewest parcels first</option>';
@@ -1404,10 +1419,10 @@ function vCallCenterStock() {
   go.type = "submit";
   bar.append(go);
 
-  if (S.ccQ) {
+  if (S.ccQ || S.ccStatus) {
     const clr = el("button", "btn", "Clear");
     clr.type = "button";
-    clr.onclick = () => { S.ccQ = ""; S.ccData = null; loadCallCenterStock(); };
+    clr.onclick = () => { S.ccQ = ""; S.ccStatus = ""; S.ccData = null; loadCallCenterStock(); };
     bar.append(clr);
   }
   bar.addEventListener("submit", ev => { ev.preventDefault(); S.ccQ = q.value; S.ccData = null; loadCallCenterStock(); });
