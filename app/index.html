@@ -3543,7 +3543,7 @@ async function loadShipments() {
   if (term) {
     const like = "%" + term.replace(/[%,()]/g, " ") + "%";
     qy = qy.or(["client.ilike." + like, "code.ilike." + like,
-                "container.ilike." + like].join(","));
+                "container.ilike." + like, "ship_num::text.ilike." + like].join(","));
   }
   if (S.shipSort === "asc") qy = qy.order("total", { ascending: true });
   else if (S.shipSort === "desc") qy = qy.order("total", { ascending: false });
