@@ -204,6 +204,7 @@ select.inp{appearance:none;background-image:linear-gradient(45deg,transparent 49
 }
 .chip.scanner{background:color-mix(in srgb,var(--st-expected) 16%,transparent);color:var(--st-expected)}
 .chip.call_center{background:color-mix(in srgb,#3498db 16%,transparent);color:#3498db}
+.cc-sub{border-left:3px solid var(--brd);margin-left:12px;padding-left:4px}
 .chip.office{background:color-mix(in srgb,var(--st-released) 16%,transparent);color:var(--st-released)}
 .chip.admin{background:var(--primary-wash);color:var(--primary)}
 .chip.off{background:var(--danger-wash);color:var(--danger)}
@@ -511,6 +512,13 @@ const S = {
   selectedZones: new Set(),
   selectedShips: new Set(),
 
+  /* call center */
+  ccData: null,        /* [{client_id, parcels: [...], totalCost}] grouped */
+  ccOpen: new Set(),   /* expanded client IDs */
+  ccSort: "most",      /* "most" | "least" */
+  ccQ: "",
+  ccLoading: false,
+
   /* setup */
   brand: null,         /* what the warehouse is called, per the database */
   cfgDraft: null,      /* edits in progress; nothing is written until Save */
@@ -718,7 +726,10 @@ function shell(view) {
       S.tab = t.id;
       render();
       /* Load on arrival, so a tab is never opened onto stale counts. */
-      if (t.id === "stock") { if (!S.stats) loadStats(); if (!S.rows) loadStock(); }
+      if (t.id === "stock") {
+        if (isCallCenter()) { if (!S.ccData) loadCallCenterStock(); }
+        else { if (!S.stats) loadStats(); if (!S.rows) loadStock(); }
+      }
       if (t.id === "zones" && !S.zoneStats) loadZoneStats();
       if (t.id === "money") {
         if (!S.money) loadMoney();
@@ -1326,7 +1337,169 @@ function scanFileDrop() {
    right for the caller: a scanner's tiles simply have no money on them,
    because the figures never leave the database. */
 
+/* ------------------------------------------------- call-centre stock --- */
+
+async function loadCallCenterStock() {
+  S.ccLoading = true; render();
+  const term = S.ccQ.trim();
+  let qy = S.sb.from("parcels_view")
+    .select("barcode,name,client_id,customer,phone,status,zone,shelf,cost,paid,shipped_at,age_days");
+  if (term) {
+    const like = "%" + term.replace(/[%,()]/g, " ") + "%";
+    const parts = [
+      "barcode.ilike." + like,
+      "client_id.ilike." + like,
+      "customer.ilike." + like,
+      "phone.ilike." + like,
+    ];
+    qy = qy.or(parts.join(","));
+  }
+  const { data, error } = await qy.order("client_id").order("barcode");
+  S.ccLoading = false;
+  if (error) { toast(error.message, "bad"); S.ccData = []; render(); return; }
+
+  const map = {};
+  for (const r of (data || [])) {
+    const cid = r.client_id || "—";
+    if (!map[cid]) map[cid] = { client_id: cid, customer: r.customer || "", phone: r.phone || "", parcels: [], totalCost: 0 };
+    map[cid].parcels.push(r);
+    map[cid].totalCost += Number(r.cost) || 0;
+    if (!map[cid].customer && r.customer) map[cid].customer = r.customer;
+    if (!map[cid].phone && r.phone) map[cid].phone = r.phone;
+  }
+
+  S.ccData = Object.values(map);
+  if (S.ccSort === "most") S.ccData.sort((a, b) => b.parcels.length - a.parcels.length);
+  else S.ccData.sort((a, b) => a.parcels.length - b.parcels.length);
+  render();
+}
+
+function vCallCenterStock() {
+  const v = el("section");
+  const head = el("div", "vhead");
+  const h = el("div");
+  h.append(el("h2", null, "Stock"));
+  h.append(el("div", "sub", "Search clients and view their parcels."));
+  head.append(h);
+  v.append(head);
+
+  /* search + sort bar */
+  const bar = el("form", "row");
+  bar.style.marginBottom = "14px";
+  const q = el("input", "inp mono");
+  q.placeholder = "Client number, name, phone or barcode…";
+  q.value = S.ccQ;
+  q.autocomplete = "off";
+  q.style.flex = "1 1 240px";
+  bar.append(q);
+
+  const ss = el("select", "inp");
+  ss.style.width = "auto";
+  ss.innerHTML = '<option value="most">Most parcels first</option><option value="least">Fewest parcels first</option>';
+  ss.value = S.ccSort;
+  ss.onchange = () => { S.ccSort = ss.value; S.ccData = null; loadCallCenterStock(); };
+  bar.append(ss);
+
+  const go = el("button", "btn pri", "Search");
+  go.type = "submit";
+  bar.append(go);
+
+  if (S.ccQ) {
+    const clr = el("button", "btn", "Clear");
+    clr.type = "button";
+    clr.onclick = () => { S.ccQ = ""; S.ccData = null; loadCallCenterStock(); };
+    bar.append(clr);
+  }
+  bar.addEventListener("submit", ev => { ev.preventDefault(); S.ccQ = q.value; S.ccData = null; loadCallCenterStock(); });
+  v.append(bar);
+
+  /* loading / empty */
+  if (S.ccLoading || !S.ccData) {
+    const e = el("div", "empty");
+    e.append(el("span", "spin"));
+    e.append(el("div", null, "Loading…"));
+    v.append(e);
+    return v;
+  }
+  if (!S.ccData.length) {
+    const e = el("div", "empty");
+    e.append(el("b", null, "No clients found"));
+    e.append(document.createTextNode(S.ccQ ? " — try a different search." : "."));
+    v.append(e);
+    return v;
+  }
+
+  /* client list */
+  const list = el("div", "list");
+  for (const g of S.ccData) {
+    const open = S.ccOpen.has(g.client_id);
+    const row = el("div", "li click" + (open ? " open" : ""));
+    row.onclick = () => {
+      if (S.ccOpen.has(g.client_id)) S.ccOpen.delete(g.client_id);
+      else S.ccOpen.add(g.client_id);
+      render();
+    };
+
+    const m = el("div", "li-m");
+    const nm = el("div", "li-nm");
+    nm.append(el("span", "mono", open ? "▼" : "▶"));
+    nm.append(el("span", "mono", " " + g.client_id));
+    if (g.customer) nm.append(el("span", null, " — " + g.customer));
+    m.append(nm);
+    const info = g.parcels.length + " parcel" + (g.parcels.length === 1 ? "" : "s");
+    m.append(el("div", "li-s", info + (g.phone ? "  ·  " + g.phone : "")));
+    row.append(m);
+
+    const a = el("div", "li-a");
+    const c = el("span", "mono num", money(g.totalCost));
+    c.style.fontWeight = "600";
+    a.append(c);
+    row.append(a);
+
+    list.append(row);
+
+    if (open) {
+      const sub = el("div", "cc-sub");
+      for (const r of g.parcels) {
+        const pr = el("div", "li click");
+        pr.style.paddingLeft = "32px";
+        pr.onclick = ev => { ev.stopPropagation(); openParcel(r.barcode); };
+        const pm = el("div", "li-m");
+        const pnm = el("div", "li-nm");
+        pnm.append(el("span", "mono", r.barcode));
+        pnm.append(el("span", "chip s-" + r.status, STATUS[r.status] || r.status));
+        pm.append(pnm);
+        const bits = [];
+        if (r.name) bits.push(r.name.length > 48 ? r.name.slice(0, 48) + "…" : r.name);
+        bits.push("at " + (r.shelf || r.zone || "—"));
+        pm.append(el("div", "li-s", bits.join("  ·  ")));
+        pr.append(pm);
+        const pa = el("div", "li-a");
+        if (r.cost != null) {
+          pa.append(el("span", "mono num", money(r.cost)));
+          pa.append(el("span", "chip " + (r.paid ? "s-delivered" : "off"), r.paid ? "Paid" : "Unpaid"));
+        }
+        pr.append(pa);
+        sub.append(pr);
+      }
+      list.append(sub);
+    }
+  }
+  v.append(list);
+
+  /* total count */
+  const total = S.ccData.reduce((s, g) => s + g.parcels.length, 0);
+  const foot = el("div", "li-s");
+  foot.style.marginTop = "8px";
+  foot.textContent = S.ccData.length + " client" + (S.ccData.length === 1 ? "" : "s") + ", " + nf0.format(total) + " parcels";
+  v.append(foot);
+
+  return v;
+}
+
 function vStock() {
+  if (isCallCenter()) return vCallCenterStock();
+
   const v = el("section");
   const head = el("div", "vhead");
   const h = el("div");
@@ -5778,7 +5951,10 @@ async function boot() {
   if (S.session) await loadMe();
   if (isCallCenter()) S.tab = "stock";
   render();
-  if (S.me) { loadBrand(); loadZones(); loadStats(); }
+  if (S.me) {
+    loadBrand(); loadZones();
+    if (isCallCenter()) loadCallCenterStock(); else loadStats();
+  }
   if (isAdmin()) loadStaff();
 
   S.sb.auth.onAuthStateChange(async (evt, session) => {
@@ -5795,10 +5971,14 @@ async function boot() {
       S.brand = null;
       S.ships = null; S.shipStats = null; S.shipQ = "";
       S.shipFilters = { mode: "", paid: "" }; S.shipSel = new Set();
+      S.ccData = null; S.ccOpen = new Set(); S.ccQ = "";
       if (S.session) await loadMe();
       if (isCallCenter()) S.tab = "stock";
       render();
-      if (S.me) { loadBrand(); loadZones(); loadStats(); }
+      if (S.me) {
+        loadBrand(); loadZones();
+        if (isCallCenter()) loadCallCenterStock(); else loadStats();
+      }
       if (isAdmin()) loadStaff();
     }
   });
