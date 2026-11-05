@@ -537,6 +537,7 @@ const S = {
   impBusy: false, impChecking: false, impRunning: false,
   impDone: 0, impPreview: null, impResult: null, impError: "",
   scanRunning: false, scanDone: 0, scanResult: null,
+  scanRecon: null, scanReconRunning: false, scanReconDone: false,
 
   /* shipping — the other business line */
   ships: null, shipStats: null, shipQ: "",
@@ -5345,6 +5346,76 @@ function scanSection() {
       w.append(dl);
       card.append(w);
     }
+
+    /* ---------- reconciliation section ---------- */
+    if (S.scanRecon && !S.scanReconDone) {
+      const rc = S.scanRecon;
+      const mc = rc.missing_count || 0;
+      const uc = r.unknown_count || 0;
+      if (mc || uc) {
+        const hr2 = el("div", "hr-t");
+        hr2.style.marginTop = "14px";
+        hr2.append(el("span", "sect-t", "Reconciliation"));
+        card.append(hr2);
+        card.append(el("div", "sub2",
+          "Comparing your scan with what is in the system:"));
+
+        if (mc) {
+          card.append(banner("warn",
+            nf0.format(mc) + " parcel" + (mc === 1 ? " was" : "s were") + " in the warehouse but not in this scan",
+            "These will be marked as delivered — they left the warehouse."));
+          const mList = el("div", "list");
+          mList.style.maxHeight = "200px"; mList.style.overflow = "auto";
+          for (const m of (rc.missing || []).slice(0, 200)) {
+            const li = el("div", "li");
+            const main = el("div", "li-m");
+            const nm = el("div", "li-nm");
+            nm.append(el("span", "mono", m.barcode));
+            if (m.client_id) nm.append(el("span", "chip", m.client_id));
+            main.append(nm);
+            if (m.customer || m.shelf) main.append(el("div", "li-s",
+              [m.customer, m.shelf ? "shelf " + m.shelf : ""].filter(Boolean).join(" · ")));
+            li.append(main);
+            mList.append(li);
+          }
+          if (mc > 200) mList.append(el("div", "sub2", "… and " + nf0.format(mc - 200) + " more"));
+          card.append(mList);
+        }
+
+        if (uc) {
+          card.append(banner("",
+            nf0.format(uc) + " unknown parcel" + (uc === 1 ? "" : "s") + " will be added to the system",
+            "These are on your shelves but not in the database — they will be added as shelved."));
+        }
+
+        const reconActs = el("div", "row");
+        reconActs.style.marginTop = "10px";
+        const applyBtn = el("button", "btn pri",
+          S.scanReconRunning ? "Applying…"
+            : "Apply reconciliation (" + (mc ? nf0.format(mc) + " delivered" : "") +
+              (mc && uc ? ", " : "") + (uc ? nf0.format(uc) + " added" : "") + ")");
+        applyBtn.type = "button";
+        applyBtn.disabled = !!S.scanReconRunning;
+        applyBtn.onclick = () => applyScanRecon();
+        reconActs.append(applyBtn);
+        const skipBtn = el("button", "btn", "Skip");
+        skipBtn.type = "button";
+        skipBtn.onclick = () => { S.scanReconDone = true; render(); };
+        reconActs.append(skipBtn);
+        card.append(reconActs);
+      }
+    }
+
+    if (S.scanReconDone && S.scanRecon) {
+      const rc = S.scanRecon;
+      const d = rc.delivered || 0, a = rc.added || 0;
+      if (d || a) {
+        card.append(banner("ok", "Reconciliation done",
+          (d ? nf0.format(d) + " marked delivered" : "") +
+          (d && a ? ", " : "") +
+          (a ? nf0.format(a) + " added to system" : "") + "."));
+      }
+    }
   }
 
   const acts = el("div", "row");
@@ -5359,14 +5430,15 @@ function scanSection() {
   const cancel = el("button", "btn", "Cancel");
   cancel.type = "button";
   cancel.disabled = !!S.scanRunning;
-  cancel.onclick = () => { S.imp = null; S.scanResult = null; render(); };
+  cancel.onclick = () => { S.imp = null; S.scanResult = null; S.scanRecon = null; S.scanReconDone = false; S._lastScanBarcodes = null; render(); };
   acts.append(cancel);
   card.append(acts);
   return card;
 }
 
 async function runScanFile(rows) {
-  S.scanRunning = true; S.scanDone = 0; S.scanResult = null; render();
+  S.scanRunning = true; S.scanDone = 0; S.scanResult = null;
+  S.scanRecon = null; S.scanReconDone = false; render();
   let shelved = 0, unchanged = 0, unknown = [];
   try {
     for (let i = 0; i < rows.length; i += 500) {
@@ -5380,14 +5452,57 @@ async function runScanFile(rows) {
       S.scanDone = Math.min(i + chunk.length, rows.length);
       render();
     }
-    S.scanResult = { shelved, unchanged, unknown_count: unknown.length, unknown_codes: unknown };
+    S.scanResult = { shelved, unchanged, unknown_count: unknown.length, unknown_codes: unknown,
+                     unknown_rows: rows.filter(r => unknown.includes(r.barcode)) };
     toast(nf0.format(shelved) + " put on their shelves", "ok");
     S.rows = null; S.stats = null; S.zoneStats = null;
+    S._lastScanBarcodes = [...new Set(rows.map(r => r.barcode))];
+    runScanRecon(rows);
   } catch (e) {
     toast("Stopped after " + nf0.format(S.scanDone) + " — " +
       ((e && e.message) || "something went wrong"), "bad");
   }
   S.scanRunning = false;
+  render();
+}
+
+async function runScanRecon(rows) {
+  const barcodes = [...new Set(rows.map(r => r.barcode))];
+  try {
+    const { data, error } = await S.sb.rpc("reconcile_scan", {
+      p_scan_barcodes: barcodes, p_action: "preview" });
+    if (error) throw error;
+    S.scanRecon = data;
+  } catch (e) {
+    S.scanRecon = { missing: [], missing_count: 0, delivered: 0, added: 0 };
+  }
+  render();
+}
+
+async function applyScanRecon() {
+  if (!S.scanResult || !S.scanRecon) return;
+  S.scanReconRunning = true; render();
+  try {
+    const scanBarcodes = S._lastScanBarcodes || [];
+    const unknownRows = S.scanResult.unknown_rows || [];
+    const { data, error } = await S.sb.rpc("reconcile_scan", {
+      p_scan_barcodes: scanBarcodes,
+      p_unknown_rows: unknownRows,
+      p_action: "apply"
+    });
+    if (error) throw error;
+    S.scanReconDone = true;
+    S.scanRecon = data;
+    const d = data.delivered || 0, a = data.added || 0;
+    const parts = [];
+    if (d) parts.push(nf0.format(d) + " marked delivered");
+    if (a) parts.push(nf0.format(a) + " added to system");
+    toast(parts.join(", ") || "Nothing to change", parts.length ? "ok" : "");
+    S.rows = null; S.stats = null; S.zoneStats = null;
+  } catch (e) {
+    toast((e && e.message) || "Reconciliation failed", "bad");
+  }
+  S.scanReconRunning = false;
   render();
 }
 
@@ -5599,7 +5714,7 @@ async function readImportFile(file) {
       map: (scan || shipping) ? {} : guessMap(headers), status: "received", zone: "",
     };
     S.impPreview = null;
-    S.scanResult = null;
+    S.scanResult = null; S.scanRecon = null; S.scanReconDone = false; S._lastScanBarcodes = null;
     if (scan || shipping) { S.impBusy = false; render(); return; }
   } catch (e) {
     S.impError = (e && e.message) || String(e);
