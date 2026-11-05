@@ -754,7 +754,6 @@ function shell(view) {
 
 function visibleTabs() {
   if (isCallCenter()) return [
-    { id: "scan", label: "Scan" },
     { id: "stock", label: "Stock" },
   ];
   const t = [
@@ -5777,6 +5776,7 @@ async function boot() {
   const { data } = await S.sb.auth.getSession();
   S.session = data.session || null;
   if (S.session) await loadMe();
+  if (isCallCenter()) S.tab = "stock";
   render();
   if (S.me) { loadBrand(); loadZones(); loadStats(); }
   if (isAdmin()) loadStaff();
@@ -5796,6 +5796,7 @@ async function boot() {
       S.ships = null; S.shipStats = null; S.shipQ = "";
       S.shipFilters = { mode: "", paid: "" }; S.shipSel = new Set();
       if (S.session) await loadMe();
+      if (isCallCenter()) S.tab = "stock";
       render();
       if (S.me) { loadBrand(); loadZones(); loadStats(); }
       if (isAdmin()) loadStaff();
