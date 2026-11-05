@@ -3438,25 +3438,29 @@ function shipmentRow(r) {
     b.onclick = () => markShipment(r, { paid: true });
     a.append(b);
   }
-  if (!r.delivered_at) {
+  if (r.delivered_at) {
+    a.append(el("span", "li-s", "delivered " + fmtDate(r.delivered_at)));
+    const ud = el("button", "btn sm", "Undo delivered");
+    ud.style.fontSize = "11px";
+    ud.onclick = () => markShipment(r, { undeliver: true });
+    a.append(ud);
+  } else {
     const d = el("button", "btn sm", "Delivered");
     d.onclick = () => markShipment(r, { delivered: true });
     a.append(d);
-    if (r.delivery_to === "waseet") {
-      a.append(el("span", "chip s-released", "With Waseet"));
-      const undo = el("button", "btn sm", "Undo");
-      undo.style.fontSize = "11px";
-      undo.onclick = () => undoShipWaseet(r);
-      a.append(undo);
-    } else {
-      const w = el("button", "btn sm", "→ Waseet");
-      w.style.background = "var(--accent, #8e44ad)"; w.style.color = "#fff";
-      w.style.borderColor = "var(--accent, #8e44ad)";
-      w.onclick = () => sendShipToWaseet(r);
-      a.append(w);
-    }
+  }
+  if (r.delivery_to === "waseet") {
+    a.append(el("span", "chip s-released", "With Waseet"));
+    const undo = el("button", "btn sm", "Undo");
+    undo.style.fontSize = "11px";
+    undo.onclick = () => undoShipWaseet(r);
+    a.append(undo);
   } else {
-    a.append(el("span", "li-s", "delivered " + fmtDate(r.delivered_at)));
+    const w = el("button", "btn sm", "→ Waseet");
+    w.style.background = "var(--accent, #8e44ad)"; w.style.color = "#fff";
+    w.style.borderColor = "var(--accent, #8e44ad)";
+    w.onclick = () => sendShipToWaseet(r);
+    a.append(w);
   }
   li.append(a);
   return li;
@@ -3468,11 +3472,12 @@ async function markShipment(r, what) {
   if (what.paid) { patch.paid_at = today; patch.paid_amount = Number(r.total) || 0; }
   if (what.unpaid) { patch.paid_at = null; patch.paid_amount = 0; }
   if (what.delivered) patch.delivered_at = today;
+  if (what.undeliver) patch.delivered_at = null;
   const { data, error } = await S.sb.from("shipments")
     .update(patch).eq("ship_num", r.ship_num).select("ship_num");
   if (error) { toast(error.message, "bad"); return; }
   if (!data || !data.length) { toast("Nothing changed — the office handles this.", "bad"); return; }
-  toast(what.paid ? "Marked paid · " + money(r.total) : what.unpaid ? "Marked unpaid" : "Marked delivered", "ok");
+  toast(what.paid ? "Marked paid · " + money(r.total) : what.unpaid ? "Marked unpaid" : what.undeliver ? "Delivery undone" : "Marked delivered", "ok");
   loadShipments(); loadShipStats();
 }
 
