@@ -1306,14 +1306,16 @@ function scanFileDrop() {
   hr.append(el("span", "sect-t", "Load a scan from the PDA"));
   card.append(hr);
   card.append(el("div", "sub2", "The file the shelf scanner exports — barcode, " +
-    "shelf, scanned at. Every parcel in it goes onto the shelf it was scanned on."));
+    "shelf, scanned at. Every parcel in it goes onto the shelf it was scanned on. " +
+    "Pick several at once (A, B, C, D…) to load a whole sweep together."));
   const row = el("div", "row");
   row.style.marginTop = "9px";
   const pick = el("input");
   pick.type = "file";
+  pick.multiple = true;
   pick.accept = ".csv,.tsv,text/csv";
   pick.className = "inp";
-  pick.onchange = () => { if (pick.files && pick.files[0]) readImportFile(pick.files[0]); };
+  pick.onchange = () => { if (pick.files && pick.files.length) readScanFiles([...pick.files]); };
   row.append(pick);
   card.append(row);
   if (S.impBusy) {
@@ -5358,12 +5360,15 @@ function scanSection() {
         hr2.append(el("span", "sect-t", "Reconciliation"));
         card.append(hr2);
         card.append(el("div", "sub2",
-          "Comparing your scan with what is in the system:"));
+          "Only the " + nf0.format(rc.shelves || 0) + " shelves in this file are checked. " +
+          "Parcels on other shelves or in other zones are not touched."));
 
         if (mc) {
+          const share = rc.on_shelves ? mc / rc.on_shelves : 0;
           card.append(banner("warn",
-            nf0.format(mc) + " parcel" + (mc === 1 ? " was" : "s were") + " in the warehouse but not in this scan",
-            "These will be marked as delivered — they left the warehouse."));
+            nf0.format(mc) + " of " + nf0.format(rc.on_shelves || mc) + " parcels recorded on these shelves were not found on them",
+            "Apply marks them delivered — they left the warehouse." +
+            (share > 0.3 ? " That is a lot for one sweep: check the file covers the whole shelf before applying." : "")));
           const mList = el("div", "list");
           mList.style.maxHeight = "200px"; mList.style.overflow = "auto";
           for (const m of (rc.missing || []).slice(0, 200)) {
@@ -5425,12 +5430,16 @@ function scanSection() {
     : "Put " + nf0.format(good) + " parcel" + (good === 1 ? "" : "s") + " on their shelves");
   go.type = "button";
   go.disabled = !good || !!S.scanRunning;
-  go.onclick = () => runScanFile(rows.filter(r => !bad.some(b => b.shelf === r.shelf)));
+  go.onclick = () => {
+    /* Every barcode read counts as seen, even under an unreadable shelf label. */
+    S._lastScanRows = rows.map(r => ({ barcode: r.barcode, shelf: r.shelf, at: r.at }));
+    runScanFile(rows.filter(r => !bad.some(b => b.shelf === r.shelf)));
+  };
   acts.append(go);
   const cancel = el("button", "btn", "Cancel");
   cancel.type = "button";
   cancel.disabled = !!S.scanRunning;
-  cancel.onclick = () => { S.imp = null; S.scanResult = null; S.scanRecon = null; S.scanReconDone = false; S._lastScanBarcodes = null; render(); };
+  cancel.onclick = () => { S.imp = null; S.scanResult = null; S.scanRecon = null; S.scanReconDone = false; S._lastScanRows = null; render(); };
   acts.append(cancel);
   card.append(acts);
   return card;
@@ -5456,8 +5465,7 @@ async function runScanFile(rows) {
                      unknown_rows: rows.filter(r => unknown.includes(r.barcode)) };
     toast(nf0.format(shelved) + " put on their shelves", "ok");
     S.rows = null; S.stats = null; S.zoneStats = null;
-    S._lastScanBarcodes = [...new Set(rows.map(r => r.barcode))];
-    runScanRecon(rows);
+    runScanRecon();
   } catch (e) {
     toast("Stopped after " + nf0.format(S.scanDone) + " — " +
       ((e && e.message) || "something went wrong"), "bad");
@@ -5466,15 +5474,17 @@ async function runScanFile(rows) {
   render();
 }
 
-async function runScanRecon(rows) {
-  const barcodes = [...new Set(rows.map(r => r.barcode))];
+/* Only parcels recorded on the shelves this file covers are compared — a scan of
+   zone A says nothing about zone C. */
+async function runScanRecon() {
   try {
     const { data, error } = await S.sb.rpc("reconcile_scan", {
-      p_scan_barcodes: barcodes, p_action: "preview" });
+      p_rows: S._lastScanRows || [], p_action: "preview" });
     if (error) throw error;
     S.scanRecon = data;
   } catch (e) {
-    S.scanRecon = { missing: [], missing_count: 0, delivered: 0, added: 0 };
+    S.scanRecon = null;
+    toast("Could not compare with the shelves — " + ((e && e.message) || "error"), "bad");
   }
   render();
 }
@@ -5483,10 +5493,9 @@ async function applyScanRecon() {
   if (!S.scanResult || !S.scanRecon) return;
   S.scanReconRunning = true; render();
   try {
-    const scanBarcodes = S._lastScanBarcodes || [];
     const unknownRows = S.scanResult.unknown_rows || [];
     const { data, error } = await S.sb.rpc("reconcile_scan", {
-      p_scan_barcodes: scanBarcodes,
+      p_rows: S._lastScanRows || [],
       p_unknown_rows: unknownRows,
       p_action: "apply"
     });
@@ -5692,8 +5701,39 @@ function importSection() {
   if (S.impResult)
     card.append(banner("ok", "Done",
       nf0.format(S.impResult.inserted) + " added, " +
-      nf0.format(S.impResult.updated) + " refreshed."));
+      nf0.format(S.impResult.updated) + " refreshed" +
+      (S.impResult.arrived ? ", " + nf0.format(S.impResult.arrived) +
+        " moved from on the way to received" : "") + "."));
   return card;
+}
+
+/* Several PDA files from one sweep become one scan. */
+async function readScanFiles(files) {
+  if (files.length === 1) return readImportFile(files[0]);
+  S.impBusy = true; S.impError = ""; S.impResult = null; render();
+  try {
+    const data = [], names = [];
+    for (const f of files) {
+      const rows = parseCsv(await f.text())
+        .filter(r => r && r.some(c => String(c == null ? "" : c).trim() !== ""));
+      const headers = (rows[0] || []).map(h => String(h == null ? "" : h).trim());
+      if (!isScanFile(headers)) throw new Error(f.name + " is not a floor scan (barcode, shelf, scanned at).");
+      const k = headers.map(hkey);
+      const iB = k.indexOf("barcode"), iS = k.indexOf("shelf");
+      const iA = k.findIndex(x => x === "scannedat" || x === "scanned" || x === "time");
+      for (const r of rows.slice(1)) data.push([r[iB], r[iS], iA >= 0 ? r[iA] : ""]);
+      names.push(f.name);
+    }
+    S.imp = { fileName: names.join(", "), headers: ["barcode", "shelf", "scanned at"],
+              data, kind: "scan", map: {}, status: "received", zone: "" };
+    S.impPreview = null;
+    S.scanResult = null; S.scanRecon = null; S.scanReconDone = false; S._lastScanRows = null;
+  } catch (e) {
+    S.impError = (e && e.message) || String(e);
+    S.imp = null;
+  }
+  S.impBusy = false;
+  render();
 }
 
 async function readImportFile(file) {
@@ -5714,7 +5754,7 @@ async function readImportFile(file) {
       map: (scan || shipping) ? {} : guessMap(headers), status: "received", zone: "",
     };
     S.impPreview = null;
-    S.scanResult = null; S.scanRecon = null; S.scanReconDone = false; S._lastScanBarcodes = null;
+    S.scanResult = null; S.scanRecon = null; S.scanReconDone = false; S._lastScanRows = null;
     if (scan || shipping) { S.impBusy = false; render(); return; }
   } catch (e) {
     S.impError = (e && e.message) || String(e);
@@ -5757,7 +5797,7 @@ async function runImport() {
   if (!rows.length) { toast("No rows with a barcode.", "bad"); return; }
 
   S.impRunning = true; S.impDone = 0; S.impResult = null; render();
-  let inserted = 0, updated = 0;
+  let inserted = 0, updated = 0, arrived = 0;
   try {
     for (let i = 0; i < rows.length; i += 400) {
       const chunk = rows.slice(i, i + 400);
@@ -5770,12 +5810,19 @@ async function runImport() {
       const r = (data && data[0]) || {};
       inserted += Number(r.inserted) || 0;
       updated += Number(r.updated) || 0;
+      /* A received export means they are here: "on the way" ones move to received. */
+      if (S.imp.status === "received") {
+        const up = await S.sb.rpc("promote_received", { p_barcodes: chunk.map(x => x.barcode) });
+        if (up.error) throw up.error;
+        arrived += Number(up.data) || 0;
+      }
       S.impDone = Math.min(i + chunk.length, rows.length);
       render();
     }
-    S.impResult = { inserted, updated };
+    S.impResult = { inserted, updated, arrived };
     S.imp = null; S.impPreview = null;
-    toast(nf0.format(inserted) + " added, " + nf0.format(updated) + " refreshed", "ok");
+    toast(nf0.format(inserted) + " added, " + nf0.format(updated) + " refreshed" +
+      (arrived ? ", " + nf0.format(arrived) + " arrived" : ""), "ok");
     S.rows = null; S.stats = null; S.money = null;
     S.customers = null; S.zoneStats = null;
   } catch (e) {
