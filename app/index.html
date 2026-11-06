@@ -928,34 +928,32 @@ async function handleScan(raw) {
     render(); focusScan(); return;
   }
 
-  /* Recognise printed shipment barcodes (SHIP-123) — look up parcels by shipment. */
+  /* Shipping-client labels (SHIP-123, printed from Labels → Shipments) name a row
+     in Shipping. In Zone mode they file that client's goods to the scanned zone. */
   const shipMatch = bc.match(/^SHIP-(\d+)$/i);
   if (shipMatch) {
     S.scanBusy = true; render();
     try {
-      const shipNum = shipMatch[1];
-      const { data, error } = await S.sb.from("parcels_view")
-        .select("barcode,name,customer,status,zone,shelf,shipment")
-        .eq("shipment", shipNum).limit(200);
-      if (error) throw error;
-      if (!data || !data.length) {
-        ping(false); feedPush("bad", bc, "No parcels found for shipment #" + shipNum);
-        return;
-      }
-      if (S.mode === "zone" && S.scanZone) {
-        let moved = 0;
-        for (const p of data) {
-          try {
-            await moveParcel(p, "shelved", { zone: S.scanZone, shelf: "" });
-            moved++;
-          } catch (_) {}
-        }
-        S.stats = null; S.rows = null; S.zoneStats = null;
-        ping(true); feedPush("ok", bc, moved + " parcels from shipment #" + shipNum + " → zone " + S.scanZone, true);
+      const shipNum = Number(shipMatch[1]);
+      if (S.mode === "zone" || S.mode === "shelve") {
+        const zone = S.mode === "zone" ? S.scanZone : (S.dest && S.dest.zone);
+        const shelf = S.mode === "shelve" && S.dest ? S.dest.shelf || null : null;
+        if (!zone && !shelf) { ping(false); feedPush("bad", bc, "Scan a zone barcode first (ZONE-X)"); return; }
+        const { data, error } = await S.sb.rpc("locate_shipments", {
+          p_rows: [{ ship_num: shipNum, zone: zone || null, shelf }] });
+        if (error) throw error;
+        if (!data || !data.located) { ping(false); feedPush("bad", bc, "No shipment #" + shipNum + " in Shipping"); return; }
+        S.ships = null;
+        ping(true); feedPush("ok", bc, "Shipment #" + shipNum + " → " + (shelf || zone), true);
       } else {
-        ping(true); feedPush("ok", bc, "Shipment #" + shipNum + ": " + data.length +
-          " parcels — " + data.filter(p => p.status === "shelved").length + " shelved, " +
-          data.filter(p => p.status === "received").length + " received");
+        const { data, error } = await S.sb.from("shipments")
+          .select("ship_num,client,boxes,zone,shelf").eq("ship_num", shipNum).maybeSingle();
+        if (error) throw error;
+        if (!data) { ping(false); feedPush("bad", bc, "No shipment #" + shipNum + " in Shipping"); return; }
+        ping(true); feedPush("ok", bc, "Shipment #" + shipNum + " · " + (data.client || "—") +
+          (data.boxes ? " · " + data.boxes + " boxes" : "") +
+          " · " + (data.shelf || data.zone ? "at " + (data.shelf || data.zone) : "no place yet") +
+          (S.mode === "lookup" ? "" : " (use Zone mode to file it)"));
       }
       return;
     } catch (e) {
@@ -3610,6 +3608,7 @@ function shipmentRow(r) {
     r.mode === "sea" ? "Sea" : "Air"));
   if (r.container) nm.append(el("span", "chip", r.container));
   if (!r.delivered_at) nm.append(el("span", "chip s-received", "not delivered"));
+  if (r.shelf || r.zone) nm.append(el("span", "chip s-shelved", "at " + (r.shelf || r.zone)));
   m.append(nm);
 
   const bits = ["#" + r.ship_num];
@@ -3737,7 +3736,7 @@ async function loadShipments() {
   const f = S.shipFilters;
   let qy = S.sb.from("shipments").select(
     "ship_num,code,client,mode,container,boxes,goods,weight_kg,volume_cbm," +
-    "price,total,paid_amount,raised_at,arrived_at,delivered_at,paid_at,delivery_to");
+    "price,total,paid_amount,raised_at,arrived_at,delivered_at,paid_at,delivery_to,zone,shelf");
   if (f.mode) qy = qy.eq("mode", f.mode);
   if (f.paid === "unpaid") qy = qy.is("paid_at", null);
   if (f.paid === "paid") qy = qy.not("paid_at", "is", null);
@@ -5330,7 +5329,12 @@ function scanSection() {
     card.append(banner("ok", "Done",
       nf0.format(r.shelved) + " put on their shelves" +
       (r.unchanged ? ", " + nf0.format(r.unchanged) + " already there" : "") +
-      (r.unknown_count ? ", " + nf0.format(r.unknown_count) + " not in the system" : "") + "."));
+      (r.unknown_count ? ", " + nf0.format(r.unknown_count) + " not in the system" : "") +
+      (r.shipsLocated ? ", " + nf0.format(r.shipsLocated) + " shipping-client shipment" +
+        (r.shipsLocated === 1 ? "" : "s") + " filed" : "") + "."));
+    if (r.shipsUnknown && r.shipsUnknown.length)
+      card.append(banner("warn", "Shipping labels with no shipment",
+        r.shipsUnknown.map(n => "SHIP-" + n).join(", ") + " — not in Shipping, so not filed."));
     if (r.unknown_count) {
       card.append(el("div", "sub2",
         "On your shelves but unknown to the warehouse — either the dashboard is " +
@@ -5432,7 +5436,8 @@ function scanSection() {
   go.disabled = !good || !!S.scanRunning;
   go.onclick = () => {
     /* Every barcode read counts as seen, even under an unreadable shelf label. */
-    S._lastScanRows = rows.map(r => ({ barcode: r.barcode, shelf: r.shelf, at: r.at }));
+    S._lastScanRows = rows.filter(r => !isShipLabel(r.barcode))
+      .map(r => ({ barcode: r.barcode, shelf: r.shelf, at: r.at }));
     runScanFile(rows.filter(r => !bad.some(b => b.shelf === r.shelf)));
   };
   acts.append(go);
@@ -5445,11 +5450,29 @@ function scanSection() {
   return card;
 }
 
-async function runScanFile(rows) {
+const isShipLabel = code => /^SHIP-\d+$/i.test(String(code || ""));
+
+async function runScanFile(allRows) {
   S.scanRunning = true; S.scanDone = 0; S.scanResult = null;
   S.scanRecon = null; S.scanReconDone = false; render();
-  let shelved = 0, unchanged = 0, unknown = [];
+  /* Shipping-client labels (SHIP-123) are shipments, not parcels: they only get a place. */
+  const rows = allRows.filter(r => !isShipLabel(r.barcode));
+  const shipRows = allRows.filter(r => isShipLabel(r.barcode));
+  let shelved = 0, unchanged = 0, unknown = [], shipsLocated = 0, shipsUnknown = [];
   try {
+    if (shipRows.length) {
+      const { data, error } = await S.sb.rpc("locate_shipments", {
+        p_rows: shipRows.map(r => ({
+          ship_num: Number(r.barcode.split("-")[1]),
+          zone: r.zone || null,
+          shelf: r.shelf && r.shelf !== r.zone ? r.shelf : null,
+          at: r.at,
+        })) });
+      if (error) throw error;
+      shipsLocated = Number(data && data.located) || 0;
+      shipsUnknown = (data && data.unknown) || [];
+      S.ships = null;
+    }
     for (let i = 0; i < rows.length; i += 500) {
       const chunk = rows.slice(i, i + 500);
       const { data, error } = await S.sb.rpc("shelve_from_scan", { p_rows: chunk });
@@ -5462,7 +5485,8 @@ async function runScanFile(rows) {
       render();
     }
     S.scanResult = { shelved, unchanged, unknown_count: unknown.length, unknown_codes: unknown,
-                     unknown_rows: rows.filter(r => unknown.includes(r.barcode)) };
+                     unknown_rows: rows.filter(r => unknown.includes(r.barcode)),
+                     shipsLocated, shipsUnknown };
     toast(nf0.format(shelved) + " put on their shelves", "ok");
     S.rows = null; S.stats = null; S.zoneStats = null;
     runScanRecon();

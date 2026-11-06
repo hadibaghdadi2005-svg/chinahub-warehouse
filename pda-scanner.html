@@ -163,7 +163,7 @@ textarea{
     <p><b>1.</b> Scan a shelf barcode. It appears at the top as the current shelf.</p>
     <p><b>2.</b> Scan every parcel on that shelf. Each one is recorded against it.</p>
     <p><b>3.</b> Scan the next shelf barcode and carry on.</p>
-    <p>Short codes are treated as shelves, long mostly-numeric codes as parcels. If a parcel is scanned twice it is counted once and flagged as a repeat.</p>
+    <p>Short codes are treated as shelves or zones (ZONE-SHIP, C-01-02…), long mostly-numeric codes as parcels. Shipping-client labels (SHIP-123) count as goods: scan a zone or shelf first, then the SHIP labels in it. If a code is scanned twice it is counted once and flagged as a repeat.</p>
     <p>Everything is stored on this device, so you can close the page and come back. Nothing is sent anywhere.</p>
     <p>When finished, press <b>Export</b>, then <b>Copy all</b>, and paste it into the warehouse app under Setup &rarr; Import. Set "These rows are" to <b>Already on shelves</b>.</p>
   </div>
@@ -186,9 +186,12 @@ function save(){
   catch(_){ toast("Device storage is full"); }
 }
 
-/* Parcel numbers are long and mostly digits; shelf labels are short. */
+/* Parcel numbers are long and mostly digits; shelf labels are short.
+   Shipping-client labels (SHIP-123) are short too, but are goods, not places. */
+const isShipLabel = code => /^SHIP-\d+$/.test(String(code || ""));
 function isParcel(code){
   const s = String(code || "");
+  if(isShipLabel(s)) return true;
   if(s.length < 11) return false;
   return (s.replace(/\D/g, "").length / s.length) > 0.7;
 }
@@ -295,7 +298,7 @@ function render(){
     const b = document.createElement("b");
     b.textContent = r.code;
     const sp = document.createElement("span");
-    sp.textContent = r.k === "p" ? "on " + r.shelf
+    sp.textContent = r.k === "p" ? (isShipLabel(r.code) ? "shipping client · on " : "on ") + r.shelf
                    : r.k === "s" ? "shelf set"
                    : r.note || "";
     bd.appendChild(b); bd.appendChild(sp);
