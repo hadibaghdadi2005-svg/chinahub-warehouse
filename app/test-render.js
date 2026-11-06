@@ -163,6 +163,19 @@ mod += `
   S.rows = rows;
   build("stock-office", () => vStock());
   build("scan-office", () => vScan());
+  S.soData = [
+    { barcode:"YT7000000000001", name:"Phone case", customer:"Wholesale Co", shipment:"SH1", status:"received",
+      shelf:"C-01-01", cost:20, paid:false, shipped_at:"2026-10-02", age_days:20 },
+    { barcode:"YT7000000000002", name:"Charger", customer:"Wholesale Co", shipment:"SH1", status:"delivered",
+      cost:5.5, paid:true, shipped_at:"2026-09-12", age_days:40 },
+    { barcode:"YT7000000000003", name:"Cable", customer:"Wholesale Co", shipment:"SH2", status:"expected",
+      cost:3, paid:false, shipped_at:"2026-10-20", age_days:0 },
+  ];
+  S.tab = "sales";
+  build("sales-office", () => vSales());
+  S.soPay = "paid";
+  build("sales-paid", () => vSales());
+  S.soPay = ""; S.tab = "stock";
   S.me = { id:"u3", name:"Hadi", role:"admin", active:true };
   build("scan-admin", () => vScan());
   S.me = { id:"u4", name:"Desk", role:"call_center", active:true };
@@ -343,7 +356,10 @@ mod += `
   S.me = { id:"u1", name:"Ali Nasser", role:"scanner", active:true };
   out["tabs-scanner-shipping"] = { ok:true,
     text: visibleTabs().map(t => t.label).join(" "), cls:"" };
+  S.me = { id:"u4", name:"Desk", role:"call_center", active:true };
+  out["tabs-callcenter"] = { ok:true, text: visibleTabs().map(t => t.label).join(" "), cls:"" };
   S.me = { id:"u2", name:"Office", role:"office", active:true };
+  out["tabs-office"] = { ok:true, text: visibleTabs().map(t => t.label).join(" "), cls:"" };
   S.ships = null; S.shipStats = null;
 
   // setup — office may look, only an admin may change
@@ -745,6 +761,23 @@ for (const bad of ["Mark paid", "Mark unpaid", "Export"])
 for (const good of ["→ On a shelf", "→ Delivered"])
   if (!bsc.includes(good)) {
     fail++; console.log("  FAIL  a scanner is missing " + JSON.stringify(good));
+  } else pass++;
+
+/* Sales orders: one client's parcels with paid and unpaid totals. */
+expect("sales-office", "Sales Orders");
+expect("sales-office", "$23.00");
+expect("sales-office", "$5.50");
+expect("sales-office", "$28.50");
+expect("sales-office", "Export");
+expect("sales-office", "Shipped Oct 2026");
+expect("sales-paid", "YT7000000000002");
+if (((out["sales-paid"] || {}).text || "").includes("YT7000000000001")) {
+  fail++; console.log("  FAIL  the paid filter still lists an unpaid parcel");
+} else pass++;
+expect("tabs-office", "Sales Orders");
+for (const v of ["tabs-scanner-shipping", "tabs-callcenter"])
+  if (((out[v] || {}).text || "").includes("Sales Orders")) {
+    fail++; console.log("  FAIL  " + v + " is offered Sales Orders");
   } else pass++;
 
 /* Every section's Export is for the office and the admin, nobody else. */

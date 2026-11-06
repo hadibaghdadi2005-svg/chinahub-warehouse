@@ -518,6 +518,10 @@ const S = {
   money: null,
   cfg: null,           /* rates and lane prices, readable only with the money */
   monthlyRates: null,  /* {month: cny_per_usd} from monthly_rates table */
+
+  /* sales orders (one wholesale client) */
+  soData: null, soLoading: false, soQ: "", soStatus: "", soPay: "", soMonth: "",
+  soSort: "new", soPage: 0,
   customers: null,
   custSearch: "",
   custOwing: true,
@@ -734,7 +738,7 @@ function vNoAccess() {
 
 async function signOut() {
   await S.sb.auth.signOut();
-  S.me = null; S.staff = []; S.rows = null; S.q = "";
+  S.me = null; S.staff = []; S.rows = null; S.q = ""; S.soData = null;
   render();
 }
 
@@ -781,6 +785,8 @@ function shell(view) {
         else { if (!S.stats) loadStats(); if (!S.rows) loadStock(); }
       }
       if (t.id === "zones" && !S.zoneStats) loadZoneStats();
+      /* Always fresh: a payment taken elsewhere must show here straight away. */
+      if (t.id === "sales") { loadSales(); if (!S.stats) loadStats(); if (!S.money) loadMoney(); }
       if (t.id === "money") {
         if (!S.money) loadMoney();
         if (!S.cfg) loadCfg();
@@ -901,6 +907,7 @@ function visibleTabs() {
     { id: "zones", label: "Zones" },
   ];
   if (sees_money()) t.push({ id: "money", label: "Money" });
+  if (canExport()) t.push({ id: "sales", label: "Sales Orders" });
   if (sees_money()) t.push({ id: "shipping", label: "Shipping" });
   if (sees_money()) t.push({ id: "summary", label: "Summary" });
   if (sees_money()) t.push({ id: "waseet", label: "Waseet" });
@@ -2755,6 +2762,240 @@ function vMoney() {
   return v;
 }
 
+/* ---------------------------------------------------------- sales orders --- */
+/* One wholesale client's parcels on their own, with their money. Everything for
+   the client is loaded once (a couple of thousand rows), so filtering, totals
+   and export are instant and always agree with each other. */
+const SALES_CLIENT = "1941515";
+const SALES_COLS = "barcode,name,customer,phone,shipment,status,zone,shelf,qty,weight_kg,cbm," +
+  "route,cost,cny,paid,paid_at,pay_method,shipped_at,received_at,delivered_at,age_days";
+
+async function loadSales() {
+  S.soLoading = true; render();
+  const rows = [];
+  try {
+    for (let from = 0; from < 50000; from += 1000) {
+      const { data, error } = await S.sb.from("parcels_view").select(SALES_COLS)
+        .eq("client_id", SALES_CLIENT).order("shipped_at", { ascending: false })
+        .order("barcode").range(from, from + 999);
+      if (error) throw error;
+      rows.push(...(data || []));
+      if (!data || data.length < 1000) break;
+    }
+    S.soData = rows;
+  } catch (e) {
+    toast("Could not load the sales orders — " + ((e && e.message) || "try again"), "bad");
+    if (!S.soData) S.soData = [];
+  }
+  S.soLoading = false;
+  render();
+}
+
+function salesFiltered() {
+  const free = (S.stats && S.stats.free_days) || 14;
+  const long = (S.stats && S.stats.long_stay_days) || 90;
+  const here = r => r.status === "received" || r.status === "shelved";
+  const term = S.soQ.trim().toLowerCase();
+  let rows = (S.soData || []).filter(r => {
+    if (S.soStatus === "in_warehouse" ? !here(r) : S.soStatus && r.status !== S.soStatus) return false;
+    if (S.soPay === "unpaid" && r.paid) return false;
+    if (S.soPay === "paid" && !r.paid) return false;
+    if (S.soPay === "late" && !(here(r) && (Number(r.age_days) || 0) > free)) return false;
+    if (S.soPay === "long" && !(here(r) && (Number(r.age_days) || 0) >= long)) return false;
+    if (S.soMonth && String(r.shipped_at || "").slice(0, 7) !== S.soMonth) return false;
+    if (term && ![r.barcode, r.name, r.shipment, r.shelf].some(v => String(v || "").toLowerCase().includes(term))) return false;
+    return true;
+  });
+  const by = {
+    new: (a, b) => String(b.shipped_at || "").localeCompare(String(a.shipped_at || "")),
+    old: (a, b) => String(a.shipped_at || "").localeCompare(String(b.shipped_at || "")),
+    cost_desc: (a, b) => (Number(b.cost) || 0) - (Number(a.cost) || 0),
+    cost_asc: (a, b) => (Number(a.cost) || 0) - (Number(b.cost) || 0),
+  }[S.soSort] || null;
+  if (by) rows = rows.slice().sort(by);
+  return rows;
+}
+
+function vSales() {
+  const v = el("section");
+  const head = el("div", "vhead");
+  const h = el("div");
+  h.append(el("h2", null, "Sales Orders"));
+  const who = S.soData && S.soData.find(r => r.customer);
+  h.append(el("div", "sub", "Every parcel for client " + SALES_CLIENT +
+    (who ? " · " + who.customer : "") + ", with what is paid and what is still owed."));
+  head.append(h);
+  const rf = el("button", "btn sm", "Refresh");
+  rf.style.marginLeft = "auto";
+  rf.disabled = !!S.soLoading;
+  rf.onclick = () => loadSales();
+  head.append(rf);
+  headExport(head, () => {
+    const rows = salesFiltered();
+    writeCsv("sales-orders-" + SALES_CLIENT, [
+      ["barcode", "Parcel no."], ["name", "Item"], ["shipment", "Shipment"],
+      [r => STATUS[r.status] || r.status, "Status"], ["zone", "Zone"], ["shelf", "Shelf"],
+      [r => r.shipped_at ? String(r.shipped_at).slice(0, 10) : "", "Shipped"],
+      [r => r.received_at ? String(r.received_at).slice(0, 10) : "", "Arrived"],
+      ["qty", "Qty"], ["weight_kg", "Weight (kg)"], ["cbm", "Volume (CBM)"], ["route", "Route"],
+      ["cost", "Charge (USD)"], ["cny", "Amount (CNY)"],
+      [r => r.paid ? "Paid" : "Unpaid", "Payment"], ["pay_method", "Payment method"],
+      [r => r.paid_at ? String(r.paid_at).slice(0, 10) : "", "Paid on"], ["age_days", "Days held"],
+    ], rows);
+  });
+  v.append(head);
+
+  if (!S.soData) {
+    const e = el("div", "empty");
+    e.append(el("span", "spin"));
+    e.append(el("div", null, "Loading the orders…"));
+    v.append(e);
+    return v;
+  }
+
+  const rows = salesFiltered();
+  const sum = list => list.reduce((a, r) => a + (Number(r.cost) || 0), 0);
+  const paid = rows.filter(r => r.paid), unpaid = rows.filter(r => !r.paid);
+  const ll = n => (S.money ? lbp(n) : "");
+  const tile = (k, val, note, colour, onclick, on) => {
+    const d = el(onclick ? "button" : "div", "tile" + (on ? " on" : ""));
+    if (onclick) { d.type = "button"; d.onclick = onclick; }
+    d.append(el("div", "k", k));
+    const b = el("div", "v", val);
+    if (colour) b.style.color = colour;
+    d.append(b);
+    if (note) d.append(el("div", "n", note));
+    return d;
+  };
+  const payTile = p => () => { S.soPay = S.soPay === p ? "" : p; S.soPage = 0; render(); };
+  const tiles = el("div", "tiles");
+  tiles.append(
+    tile("Unpaid", money(sum(unpaid)), nf0.format(unpaid.length) + " parcels" + (ll(sum(unpaid)) ? " · " + ll(sum(unpaid)) : ""),
+      "var(--danger)", payTile("unpaid"), S.soPay === "unpaid"),
+    tile("Paid", money(sum(paid)), nf0.format(paid.length) + " parcels" + (ll(sum(paid)) ? " · " + ll(sum(paid)) : ""),
+      "var(--ok)", payTile("paid"), S.soPay === "paid"),
+    tile("Total", money(sum(rows)), nf0.format(rows.length) + " parcels" +
+      (rows.length !== S.soData.length ? " of " + nf0.format(S.soData.length) : "")),
+    tile("In the warehouse", nf0.format(rows.filter(r => r.status === "received" || r.status === "shelved").length),
+      nf0.format(rows.filter(r => r.status === "expected").length) + " still on the way"),
+  );
+  v.append(tiles);
+  v.append(salesFilters());
+
+  if (S.soLoading) {
+    const b = el("div", "sub2");
+    b.append(el("span", "spin"));
+    b.append(document.createTextNode(" refreshing…"));
+    b.style.marginBottom = "8px";
+    v.append(b);
+  }
+  if (!rows.length) {
+    const e = el("div", "empty");
+    e.append(el("b", null, "Nothing matches"));
+    e.append(document.createTextNode("Try clearing a filter."));
+    v.append(e);
+    return v;
+  }
+
+  const PAGE = 100;
+  const pages = Math.ceil(rows.length / PAGE);
+  if (S.soPage >= pages) S.soPage = pages - 1;
+  const list = el("div", "list");
+  for (const r of rows.slice(S.soPage * PAGE, S.soPage * PAGE + PAGE)) list.append(salesRow(r));
+  v.append(list);
+
+  const w = el("div", "row");
+  w.style.marginTop = "12px";
+  const from = S.soPage * PAGE;
+  w.append(el("span", "li-s", nf0.format(from + 1) + "–" + nf0.format(Math.min(from + PAGE, rows.length)) +
+    " of " + nf0.format(rows.length)));
+  const sp = el("span"); sp.style.marginLeft = "auto";
+  const prev = el("button", "btn sm", "Back");
+  prev.disabled = S.soPage === 0;
+  prev.onclick = () => { S.soPage--; render(); };
+  const next = el("button", "btn sm", "Next");
+  next.disabled = S.soPage >= pages - 1;
+  next.onclick = () => { S.soPage++; render(); };
+  w.append(sp, prev, next);
+  v.append(w);
+  return v;
+}
+
+function salesFilters() {
+  const bar = el("form", "row");
+  bar.style.marginBottom = "14px";
+  const q = el("input", "inp mono");
+  q.placeholder = "Barcode, item, shipment or shelf…";
+  q.value = S.soQ;
+  q.autocomplete = "off";
+  q.style.flex = "1 1 220px";
+  bar.append(q);
+
+  const sel = (opts, value, onchange) => {
+    const s = el("select", "inp");
+    s.style.width = "auto";
+    for (const [val, label] of opts) {
+      const o = el("option", null, label);
+      o.value = val;
+      s.append(o);
+    }
+    s.value = value;
+    s.onchange = () => { onchange(s.value); S.soPage = 0; render(); };
+    bar.append(s);
+  };
+  sel([["", "All statuses"], ["expected", "On the way"], ["in_warehouse", "In the warehouse"],
+       ["at_branch", STATUS.at_branch], ["released", STATUS.released], ["delivered", STATUS.delivered]],
+      S.soStatus, x => { S.soStatus = x; });
+  const free = (S.stats && S.stats.free_days) || 14;
+  const long = (S.stats && S.stats.long_stay_days) || 90;
+  sel([["", "Paid & unpaid"], ["unpaid", "Unpaid only"], ["paid", "Paid only"],
+       ["late", "Over " + free + " free days"], ["long", "Held " + long + "+ days"]],
+      S.soPay, x => { S.soPay = x; });
+  const months = [...new Set((S.soData || []).map(r => String(r.shipped_at || "").slice(0, 7)).filter(Boolean))].sort().reverse();
+  sel([["", "Every month"]].concat(months.map(m => [m, "Shipped " +
+        new Date(m + "-01T00:00:00").toLocaleDateString("en-GB", { month: "short", year: "numeric" })])),
+      S.soMonth, x => { S.soMonth = x; });
+  sel([["new", "Newest first"], ["old", "Oldest first"], ["cost_desc", "Charge: high→low"], ["cost_asc", "Charge: low→high"]],
+      S.soSort, x => { S.soSort = x; });
+
+  const go = el("button", "btn pri", "Search");
+  go.type = "submit";
+  bar.append(go);
+  if (S.soQ || S.soStatus || S.soPay || S.soMonth) {
+    const clr = el("button", "btn", "Clear");
+    clr.type = "button";
+    clr.onclick = () => { S.soQ = ""; S.soStatus = ""; S.soPay = ""; S.soMonth = ""; S.soPage = 0; render(); };
+    bar.append(clr);
+  }
+  bar.addEventListener("submit", ev => { ev.preventDefault(); S.soQ = q.value; S.soPage = 0; render(); });
+  return bar;
+}
+
+function salesRow(r) {
+  const li = el("div", "li click");
+  li.onclick = () => openParcel(r.barcode);
+  const m = el("div", "li-m");
+  const nm = el("div", "li-nm");
+  nm.append(el("span", "mono", r.barcode));
+  nm.append(el("span", "chip s-" + r.status, STATUS[r.status] || r.status));
+  m.append(nm);
+  const bits = [];
+  if (r.name) bits.push(r.name.length > 48 ? r.name.slice(0, 48) + "…" : r.name);
+  if (r.shipment) bits.push(r.shipment);
+  if (r.shelf || r.zone) bits.push(r.shelf || r.zone);
+  if (r.shipped_at) bits.push("shipped " + fmtDate(r.shipped_at));
+  m.append(el("div", "li-s", bits.join("  ·  ")));
+  li.append(m);
+  const a = el("div", "li-a");
+  const c = el("span", "mono num", money(r.cost));
+  c.style.fontWeight = "700";
+  if (!r.paid) c.style.color = "var(--danger)";
+  a.append(c);
+  a.append(el("span", "chip " + (r.paid ? "s-delivered" : "off"), r.paid ? "Paid" : "Unpaid"));
+  li.append(a);
+  return li;
+}
+
 function moneyFilters() {
   const bar = el("form", "row");
   bar.style.marginBottom = "14px";
@@ -3095,7 +3336,10 @@ async function openParcel(barcode) {
   }
 }
 
-const closeParcel = () => { S.drawer = null; S._drawerShown = null; render(); };
+const closeParcel = () => {
+  S.drawer = null; S._drawerShown = null; render();
+  if (S.tab === "sales") loadSales();
+};
 
 function vDrawer() {
   const d = S.drawer;
@@ -6339,6 +6583,7 @@ function render() {
              : S.tab === "setup" && sees_money() ? vSetup()
              : S.tab === "shipping" && sees_money() ? vShipping()
              : S.tab === "money" && sees_money() ? vMoney()
+             : S.tab === "sales" && canExport() ? vSales()
              : S.tab === "summary" && sees_money() ? vSummary()
              : S.tab === "waseet" && sees_money() ? vWaseet()
              : S.tab === "labels" ? vLabels()
@@ -6392,6 +6637,7 @@ async function boot() {
       S.ships = null; S.shipStats = null; S.shipQ = "";
       S.shipFilters = { mode: "", paid: "" }; S.shipSel = new Set();
       S.ccData = null; S.ccOpen = new Set(); S.ccQ = "";
+      S.soData = null; S.soQ = ""; S.soStatus = ""; S.soPay = ""; S.soMonth = ""; S.soPage = 0;
       if (S.session) await loadMe();
       if (isCallCenter()) S.tab = "stock";
       render();
