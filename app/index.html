@@ -357,6 +357,46 @@ input[type=file].inp{padding:8px 10px;cursor:pointer}
   .lanerow{grid-template-columns:1fr 1fr;gap:6px;padding:10px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface-2)}
 }
 
+/* ---------- motion ----------
+   The screen is rebuilt on every change, so entrance animations hang off
+   classes that are only set when a section is first shown (main.enter,
+   .tab.pop, .scrim.enter) — a scan never makes the page dance. */
+.btn,.tab,.tile,.zcard,.lbl-tab,.li.click{
+  transition:background-color .18s,border-color .18s,color .18s,box-shadow .22s,transform .18s cubic-bezier(.2,.8,.2,1);
+}
+.btn:active:not([disabled]),.tab:active,.tile:active,.zcard:active,.lbl-tab:active{transform:scale(.96)}
+.tile:hover,.zcard:hover{transform:translateY(-2px);box-shadow:var(--shadow-lg)}
+.tab.pop{animation:tabpop .5s cubic-bezier(.3,1.6,.5,1)}
+@keyframes tabpop{0%{transform:scale(.82)}60%{transform:scale(1.06)}100%{transform:scale(1)}}
+main.enter>*>*{animation:rise .5s cubic-bezier(.2,.8,.2,1) both}
+main.enter>*>*:nth-child(2){animation-delay:.05s}
+main.enter>*>*:nth-child(3){animation-delay:.1s}
+main.enter>*>*:nth-child(4){animation-delay:.15s}
+main.enter>*>*:nth-child(5){animation-delay:.2s}
+main.enter>*>*:nth-child(n+6){animation-delay:.25s}
+main.enter .tiles>*,main.enter .zgrid>*{animation:rise .45s cubic-bezier(.2,.8,.2,1) both}
+main.enter .tiles>:nth-child(2),main.enter .zgrid>:nth-child(2){animation-delay:.12s}
+main.enter .tiles>:nth-child(3),main.enter .zgrid>:nth-child(3){animation-delay:.16s}
+main.enter .tiles>:nth-child(4),main.enter .zgrid>:nth-child(4){animation-delay:.2s}
+main.enter .tiles>:nth-child(5),main.enter .zgrid>:nth-child(5){animation-delay:.24s}
+main.enter .tiles>:nth-child(n+6),main.enter .zgrid>:nth-child(n+6){animation-delay:.28s}
+main.enter .zbar i{animation:grow 1s .25s cubic-bezier(.2,.8,.2,1) both;transform-origin:left}
+@keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+@keyframes grow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@keyframes fadein{from{opacity:0}to{opacity:1}}
+@keyframes popin{from{opacity:0;transform:translateY(18px) scale(.97)}to{opacity:1;transform:none}}
+.scrim:has(>.modal),.scrim.enter{animation:fadein .2s ease-out both}
+.modal,.scrim.enter .drawer{animation:popin .32s cubic-bezier(.2,.9,.3,1.1) both}
+.toast{animation:popin .35s cubic-bezier(.2,.9,.3,1.2) both}
+
+/* The airplane that carries you between sections. */
+.flight{position:fixed;inset:0;pointer-events:none;z-index:70;transition:opacity .35s}
+.flight.out{opacity:0}
+.flight svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.flight .trail{fill:none;stroke:var(--primary);stroke-width:2.5;stroke-linecap:round;stroke-dasharray:2 9;opacity:.75}
+.flight .plane{color:#c8262c;filter:drop-shadow(0 6px 8px rgba(10,30,28,.3))}
+@media print{.flight{display:none!important}}
+
 /* ---------- toasts ---------- */
 .toasts{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(18px + env(safe-area-inset-bottom,0px));z-index:90;display:flex;flex-direction:column;gap:8px;width:min(440px,calc(100vw - 32px))}
 .toast{
@@ -720,13 +760,21 @@ function shell(view) {
   inr.append(brand, who);
   top.append(inr);
 
+  /* Only the first render of a section animates it in. */
+  const entering = S._shownTab !== S.tab;
+  S._shownTab = S.tab;
+
   const tabs = el("nav", "tabs gut");
-  for (const t of visibleTabs()) {
-    const b = el("button", "tab", t.label);
+  const list = visibleTabs();
+  for (const t of list) {
+    const b = el("button", "tab" + (entering && t.id === S.tab ? " pop" : ""), t.label);
     if (t.id === S.tab) b.setAttribute("aria-current", "page");
     b.onclick = () => {
+      if (t.id === S.tab) return;
+      const from = list.findIndex(x => x.id === S.tab);
       S.tab = t.id;
       render();
+      flyBetween(list.findIndex(x => x.id === t.id) >= from ? 1 : -1);
       /* Load on arrival, so a tab is never opened onto stale counts. */
       if (t.id === "stock") {
         if (isCallCenter()) { if (!S.ccData) loadCallCenterStock(); }
@@ -759,10 +807,88 @@ function shell(view) {
   }
   top.append(tabs);
 
-  const main = el("main", "gut");
+  const main = el("main", "gut" + (entering ? " enter" : ""));
   main.append(view);
   frag.append(top, main);
   return frag;
+}
+
+/* A plane crosses the screen on a curve, trailing a dotted contrail, and the
+   new section is uncovered behind it. Nothing waits on it: the section is
+   already live underneath, so a scan typed straight away still lands. */
+const PLANE_D = "M21 16v-2l-8-5V3.5c0-.83-.67-1.5-1.5-1.5S10 2.67 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z";
+let flight = null;
+function flyBetween(dir) {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  if (flight) flight.end(true);
+  const W = innerWidth, H = innerHeight;
+  const top = document.querySelector(".top");
+  const base = Math.min(H * 0.55, (top ? top.getBoundingClientRect().bottom : 90) + 150);
+  const P0 = {x: dir > 0 ? -70 : W + 70, y: base + 50};
+  const P1 = {x: W / 2, y: base - 120};
+  const P2 = {x: dir > 0 ? W + 70 : -70, y: base + 50};
+  const at = (e) => ({
+    x: (1 - e) * (1 - e) * P0.x + 2 * (1 - e) * e * P1.x + e * e * P2.x,
+    y: (1 - e) * (1 - e) * P0.y + 2 * (1 - e) * e * P1.y + e * e * P2.y,
+  });
+  const NS = "http://www.w3.org/2000/svg";
+  const box = document.createElement("div");
+  box.className = "flight";
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+  const clipId = "fl" + Date.now();
+  const defs = document.createElementNS(NS, "defs");
+  const clip = document.createElementNS(NS, "clipPath");
+  clip.id = clipId;
+  const rect = document.createElementNS(NS, "rect");
+  rect.setAttribute("y", "0"); rect.setAttribute("height", String(H)); rect.setAttribute("width", "0");
+  clip.append(rect); defs.append(clip); svg.append(defs);
+  const trail = document.createElementNS(NS, "path");
+  trail.setAttribute("class", "trail");
+  trail.setAttribute("d", `M${P0.x} ${P0.y} Q${P1.x} ${P1.y} ${P2.x} ${P2.y}`);
+  trail.setAttribute("clip-path", `url(#${clipId})`);
+  const plane = document.createElementNS(NS, "g");
+  plane.setAttribute("class", "plane");
+  const pp = document.createElementNS(NS, "path");
+  pp.setAttribute("d", PLANE_D); pp.setAttribute("fill", "currentColor");
+  plane.append(pp);
+  svg.append(trail, plane);
+  box.append(svg);
+  document.body.append(box);
+
+  const D = 820, t0 = performance.now();
+  const ease = p => p < .5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;
+  let raf = 0, done = false;
+  const reveal = (x) => {
+    const m = document.querySelector("main");
+    if (!m) return;
+    const r = m.getBoundingClientRect();
+    m.style.clipPath = dir > 0
+      ? `inset(0 ${Math.max(0, r.right - x)}px 0 0)`
+      : `inset(0 0 0 ${Math.max(0, x - r.left)}px)`;
+  };
+  const end = (now) => {
+    if (done) return;
+    done = true;
+    cancelAnimationFrame(raf);
+    const m = document.querySelector("main");
+    if (m) m.style.clipPath = "";
+    if (now) box.remove();
+    else { box.classList.add("out"); setTimeout(() => box.remove(), 380); }
+    if (flight && flight.box === box) flight = null;
+  };
+  flight = {box, end};
+  const frame = (now) => {
+    const p = Math.min(1, (now - t0) / D), e = ease(p);
+    const a = at(e), b = at(Math.min(1, e + 0.01));
+    const deg = Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI + 90;
+    plane.setAttribute("transform", `translate(${a.x} ${a.y}) rotate(${deg}) scale(2.1) translate(-12 -12)`);
+    if (dir > 0) { rect.setAttribute("x", "0"); rect.setAttribute("width", String(Math.max(0, a.x))); }
+    else { rect.setAttribute("x", String(a.x)); rect.setAttribute("width", String(Math.max(0, W - a.x))); }
+    reveal(a.x);
+    if (p < 1) raf = requestAnimationFrame(frame); else end(false);
+  };
+  raf = requestAnimationFrame(frame);
 }
 
 function visibleTabs() {
@@ -2893,12 +3019,13 @@ async function openParcel(barcode) {
   }
 }
 
-const closeParcel = () => { S.drawer = null; render(); };
+const closeParcel = () => { S.drawer = null; S._drawerShown = null; render(); };
 
 function vDrawer() {
   const d = S.drawer;
   if (!d) return null;
-  const scrim = el("div", "scrim");
+  const scrim = el("div", "scrim" + (S._drawerShown !== d.barcode ? " enter" : ""));
+  S._drawerShown = d.barcode;
   scrim.addEventListener("click", e => { if (e.target === scrim) closeParcel(); });
   const panel = el("aside", "drawer");
   panel.setAttribute("role", "dialog");
