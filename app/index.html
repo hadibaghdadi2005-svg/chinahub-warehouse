@@ -1234,6 +1234,15 @@ function vScan() {
   snd.style.marginLeft = "auto";
   snd.onclick = () => { S.beep = !S.beep; if (S.beep) ping(true); render(); focusScan(); };
   head.append(snd);
+  headExport(head, () => {
+    if (!S.scanFeed.length) { toast("Nothing scanned yet.", "bad"); return; }
+    writeCsv("scans", [
+      [r => new Date(r.t).toLocaleString("en-GB"), "Time"],
+      ["bc", "Code scanned"],
+      [r => r.kind === "ok" ? "OK" : r.kind === "bad" ? "Refused" : r.kind, "Result"],
+      ["msg", "What happened"],
+    ], S.scanFeed.slice().reverse());
+  });
   v.append(head);
 
   /* mode */
@@ -1650,6 +1659,7 @@ function vStock() {
     ? "Every parcel the warehouse knows about."
     : "Every parcel the warehouse knows about. Charges are not shown to a scanner."));
   head.append(h);
+  headExport(head, exportStockList, "Export list");
   v.append(head);
 
   v.append(stockTiles());
@@ -2065,7 +2075,7 @@ function bulkBar() {
   act("→ " + branchLabel(), () => askBulkMove("at_branch"));
   act("→ Waseet", () => askBulkMove("released"));
   act("→ Delivered", () => askBulkMove("delivered"));
-  act("Export", exportSelection);
+  if (canExport()) act("Export", exportSelection);
   act("Clear", () => { S.sel.clear(); render(); });
   if (S.bulkBusy) bar.append(el("span", "spin"));
   return bar;
@@ -2263,16 +2273,65 @@ const csvCell = v => {
   return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 };
 
+/* Exporting is for the office and the admin only — not scanners, not the call
+   centre — so it has its own test rather than sees_money(). */
+const canExport = () => !!S.me && (S.me.role === "office" || S.me.role === "admin");
+
+/* cols: [[key or (row) => value, header], …] */
+function writeCsv(base, cols, rows) {
+  const csv = [cols.map(c => csvCell(c[1])).join(",")]
+    .concat(rows.map(r => cols.map(c => csvCell(typeof c[0] === "function" ? c[0](r) : r[c[0]])).join(",")))
+    .join("\n");
+  const name = base + "-" + new Date().toISOString().slice(0, 10) + ".csv";
+  if (offerFile(name, csv)) toast(nf0.format(rows.length) + " row" + (rows.length === 1 ? "" : "s") + " exported", "ok");
+  else toast("The browser would not save the file.", "bad");
+}
+
+/* An Export button at the right of a section's header, or nothing for anyone else. */
+function headExport(head, fn, label) {
+  if (!canExport()) return;
+  const b = el("button", "btn sm", label || "Export");
+  b.type = "button";
+  b.title = "Download what this section shows as a spreadsheet (CSV)";
+  if (![...head.children].some(c => c.style && c.style.marginLeft === "auto")) b.style.marginLeft = "auto";
+  b.onclick = async () => {
+    b.disabled = true;
+    try { await fn(); }
+    catch (e) { toast("Could not export — " + ((e && e.message) || "try again"), "bad"); }
+    finally { b.disabled = false; }
+  };
+  head.append(b);
+}
+
+const PARCEL_COLS = ["barcode", "name", "client_id", "customer", "phone", "shipment",
+                     "status", "zone", "shelf", "qty", "weight_kg", "cbm", "dims",
+                     "origin", "route", "age_days", "cost", "paid", "pay_method", "cny", "declared"];
+const PARCEL_HEAD = { barcode: "Parcel no.", name: "Item", client_id: "Client no.",
+  customer: "Client", phone: "Phone", shipment: "Shipment", status: "Status",
+  zone: "Zone", shelf: "Shelf", qty: "Qty", weight_kg: "Weight (kg)",
+  cbm: "Volume (CBM)", dims: "Box size", origin: "From", route: "Route",
+  age_days: "Days held", cost: "Charge (USD)", paid: "Paid",
+  pay_method: "Payment method", cny: "Amount (CNY)", declared: "Declared" };
+
+/* Every parcel the current search, filters and sort match — not just this page. */
+async function exportStockList() {
+  const rows = [], PAGE = 1000, MAX = 50000;
+  for (let from = 0; from < MAX; from += PAGE) {
+    const { data, error } = await stockQuery(PARCEL_COLS.join(",")).range(from, from + PAGE - 1);
+    if (error) throw error;
+    rows.push(...(data || []));
+    if (!data || data.length < PAGE) break;
+  }
+  writeCsv("stock", PARCEL_COLS.map(c => [c === "status" ? r => STATUS[r.status] || r.status : c, PARCEL_HEAD[c]]), rows);
+}
+
 /* The selection may be larger than what is on screen, so the rows are fetched
    back before they can be written out. */
 async function exportSelection() {
   const codes = [...S.sel];
   if (!codes.length) { toast("Nothing selected.", "bad"); return; }
   S.bulkBusy = true; render();
-  const cols = ["barcode", "name", "client_id", "customer", "phone", "shipment",
-                "status", "zone", "shelf", "qty", "weight_kg", "cbm", "dims",
-                "origin", "route", "age_days"];
-  if (sees_money()) cols.push("cost", "paid", "pay_method", "cny", "declared");
+  const cols = PARCEL_COLS;
   const rows = [];
   try {
     for (let i = 0; i < codes.length; i += 300) {
@@ -2288,12 +2347,7 @@ async function exportSelection() {
     return;
   }
   rows.sort((a, b) => String(a.barcode).localeCompare(String(b.barcode)));
-  const HEAD = { barcode: "Parcel no.", name: "Item", client_id: "Client no.",
-    customer: "Client", phone: "Phone", shipment: "Shipment", status: "Status",
-    zone: "Zone", shelf: "Shelf", qty: "Qty", weight_kg: "Weight (kg)",
-    cbm: "Volume (CBM)", dims: "Box size", origin: "From", route: "Route",
-    age_days: "Days held", cost: "Charge (USD)", paid: "Paid",
-    pay_method: "Payment method", cny: "Amount (CNY)", declared: "Declared" };
+  const HEAD = PARCEL_HEAD;
   const csv = [cols.map(c => csvCell(HEAD[c] || c)).join(",")]
     .concat(rows.map(r => cols.map(c => csvCell(r[c])).join(",")))
     .join("\n");
@@ -2313,6 +2367,14 @@ function vZones() {
   h.append(el("div", "sub", "How the floor is divided. Shelf zones hold located stock; " +
     "staging areas are inside the warehouse but not on shelves."));
   head.append(h);
+  headExport(head, () => {
+    if (!S.zoneStats) { toast("Still counting the zones.", "bad"); return; }
+    writeCsv("zones", [
+      ["code", "Zone"], ["label", "Name"], ["kind", "Kind"], ["parcels", "Parcels"],
+      ["racks", "Racks"], ["levels", "Levels"], ["locations_used", "Locations in use"],
+      ["capacity", "Capacity"], ["note", "Note"],
+    ], S.zoneStats);
+  });
   v.append(head);
 
   if (!S.zoneStats) {
@@ -2405,6 +2467,20 @@ function vLabels() {
   pr.style.marginLeft = "auto";
   pr.onclick = () => window.print();
   head.append(pr);
+  headExport(head, () => {
+    if (S.labelTab === "shipments") {
+      if (!S.labelShips) { toast("Still loading the shipments.", "bad"); return; }
+      writeCsv("shipment-labels", [
+        [r => "SHIP-" + r.ship_num, "Barcode"], ["ship_num", "Shipment no."], ["client", "Client"],
+        ["phone", "Phone"], ["mode", "Mode"], ["boxes", "Cartons"], ["weight_kg", "Weight (kg)"],
+        ["volume_cbm", "Volume (CBM)"], ["arrived_at", "Received"], ["goods", "Goods"],
+      ], S.labelShips);
+    } else {
+      writeCsv("zone-labels", [
+        [r => "ZONE-" + r.code, "Barcode"], ["code", "Zone"], ["label", "Name"], ["kind", "Kind"],
+      ], S.zones || []);
+    }
+  });
   v.append(head);
 
   const tabs = el("div", "lbl-tabs no-print");
@@ -2701,7 +2777,7 @@ function moneyFilters() {
   const expBtn = el("button", "btn", "Export");
   expBtn.type = "button";
   expBtn.onclick = () => exportCustomers();
-  bar.append(expBtn);
+  if (canExport()) bar.append(expBtn);
 
   bar.addEventListener("submit", ev => {
     ev.preventDefault();
@@ -3663,7 +3739,7 @@ function vShipping() {
   toolRow.append(sortSel);
   const expBtn = el("button", "btn", "Export");
   expBtn.onclick = () => exportShipments();
-  toolRow.append(expBtn);
+  if (canExport()) toolRow.append(expBtn);
   v.append(toolRow);
 
   if (!S.ships) {
@@ -3957,7 +4033,7 @@ function vSummary() {
   }
   const expBtn = el("button", "btn", "Export");
   expBtn.onclick = () => exportSummary();
-  toolRow.append(expBtn);
+  if (canExport()) toolRow.append(expBtn);
   v.append(toolRow);
 
   const m = S.money;
@@ -4134,7 +4210,7 @@ function vWaseet() {
   toolRow.append(sortSel);
   const expBtn = el("button", "btn", "Export");
   expBtn.onclick = () => exportWaseet();
-  toolRow.append(expBtn);
+  if (canExport()) toolRow.append(expBtn);
   v.append(toolRow);
 
   if (!S.waseetData || !S.waseetShips) {
@@ -4479,6 +4555,17 @@ function vSetup() {
     ? "Rates, storage rules and the floor plan."
     : "Rates, storage rules and the floor plan. Only an admin can change these."));
   head.append(h);
+  headExport(head, () => {
+    const rows = (S.zones || []).map(z => ({
+      section: "Floor plan", key: z.code, name: z.label, value: z.kind,
+      detail: [z.racks ? z.racks + " racks" : "", z.levels ? z.levels + " levels" : "",
+               z.capacity ? "fits " + z.capacity : "", z.note || ""].filter(Boolean).join(" · "),
+    }));
+    for (const m of Object.keys(S.monthlyRates || {}).sort())
+      rows.push({ section: "CNY per USD", key: m, name: "", value: S.monthlyRates[m], detail: "" });
+    writeCsv("setup", [["section", "Section"], ["key", "Code / month"], ["name", "Name"],
+                       ["value", "Kind / rate"], ["detail", "Details"]], rows);
+  });
   v.append(head);
 
   if (!S.cfg) {
@@ -5996,6 +6083,11 @@ function vStaff() {
   add.onclick = askAddStaff;
   add.style.marginLeft = "auto";
   head.append(add);
+  headExport(head, () => writeCsv("staff", [
+    ["name", "Name"], [r => (ROLES[r.role] || {}).label || r.role, "Role"],
+    [r => r.active ? "Yes" : "No", "Can sign in"],
+    [r => r.created_at ? String(r.created_at).slice(0, 10) : "", "Added"],
+  ], S.staff || []));
   v.append(head);
 
   v.append(banner(null, "Roles are enforced by the database, not the screen",

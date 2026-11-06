@@ -162,6 +162,12 @@ mod += `
   S.stats = summary;
   S.rows = rows;
   build("stock-office", () => vStock());
+  build("scan-office", () => vScan());
+  S.me = { id:"u3", name:"Hadi", role:"admin", active:true };
+  build("scan-admin", () => vScan());
+  S.me = { id:"u4", name:"Desk", role:"call_center", active:true };
+  build("scan-callcenter", () => vScan());
+  S.me = { id:"u2", name:"Office", role:"office", active:true };
 
   S.filters = { status:"shelved", zone:"C", paid:"long" };
   build("stock-filtered", () => vStock());
@@ -731,13 +737,23 @@ expect("bulk-paid-dialog", "How did they pay?");
 
 /* A scanner may move parcels in bulk but must not be offered the money. */
 const bsc = (out["stock-selected-scanner"] || {}).text || "";
-for (const bad of ["Mark paid", "Mark unpaid"])
+/* Exporting is for the office and the admin only. */
+for (const bad of ["Mark paid", "Mark unpaid", "Export"])
   if (bsc.includes(bad)) {
     fail++; console.log("  FAIL  a scanner is offered " + JSON.stringify(bad) + " in bulk");
   } else pass++;
-for (const good of ["→ On a shelf", "→ Delivered", "Export"])
+for (const good of ["→ On a shelf", "→ Delivered"])
   if (!bsc.includes(good)) {
     fail++; console.log("  FAIL  a scanner is missing " + JSON.stringify(good));
+  } else pass++;
+
+/* Every section's Export is for the office and the admin, nobody else. */
+expect("stock-office", "Export list");
+expect("scan-office", "Export");
+expect("scan-admin", "Export");
+for (const v of ["stock-scanner", "scan-with-feed", "scan-callcenter"])
+  if (((out[v] || {}).text || "").includes("Export")) {
+    fail++; console.log("  FAIL  " + v + " offers Export");
   } else pass++;
 
 /* Selection is by barcode, so paging and reloading cannot scramble it. */
