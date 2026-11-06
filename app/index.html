@@ -1927,7 +1927,13 @@ function stockQuery(cols, withCount) {
   const long = (S.stats && S.stats.long_stay_days) || 90;
   if (f.paid === "late") qy = qy.in("status", ["shelved", "received"]).gt("age_days", free);
   if (f.paid === "long") qy = qy.in("status", ["shelved", "received"]).gte("age_days", long);
-  if (f.paid === "unpaid") qy = qy.eq("paid", false).neq("status", "expected");
+  if (f.paid === "unpaid") {
+    qy = qy.eq("paid", false).neq("status", "expected");
+    /* Hamra and Waseet parcels are not counted as owed to the warehouse —
+       unless that is the status being looked at. */
+    if (f.status !== "at_branch" && f.status !== "released")
+      qy = qy.not("status", "in", "(at_branch,released)");
+  }
 
   const term = S.q.trim();
   if (term) {
