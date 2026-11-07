@@ -2124,7 +2124,7 @@ function vStock() {
 /* Admin only: paste a column of parcel numbers and see them all at once. The
    list below becomes exactly those parcels, so ticking, moving, paying and
    exporting all work on them as usual. */
-const BULK_MAX = 500;
+const BULK_MAX = 5000;
 
 function parseBulk(text) {
   const seen = new Set(), out = [];
@@ -2217,7 +2217,9 @@ function bulkStrip() {
 /* Shipments answer to their code or their number (SHIP-12, 12). */
 function bulkShipFilter(q) {
   if (!S.bulk) return q;
-  const safe = S.bulk.codes.filter(c => /^[A-Za-z0-9._-]+$/.test(c));
+  /* Long all-digit numbers are parcels, not shipments; leaving them out keeps
+     the request short however many parcels were pasted. */
+  const safe = S.bulk.codes.filter(c => /^[A-Za-z0-9._-]+$/.test(c) && !/^d{10,}$/.test(c)).slice(0, 300);
   const nums = safe.map(c => (/^(?:SHIP-?)?(\d{1,9})$/i.exec(c) || [])[1]).filter(Boolean);
   const parts = [];
   if (safe.length) parts.push("code.in.(" + safe.join(",") + ")");
@@ -2230,11 +2232,12 @@ async function loadBulkSummary() {
   const b = S.bulk;
   if (!b) return;
   const found = [];
-  for (let i = 0; i < b.codes.length; i += 150) {
-    const { data, error } = await S.sb.from("parcels_view")
-      .select("barcode,status,cost,paid").in("barcode", b.codes.slice(i, i + 150));
-    if (error) { toast("Could not check the list — " + error.message, "bad"); return; }
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await S.sb.rpc("parcels_by_barcodes", { p_codes: b.codes })
+      .select("barcode,status,cost,paid").range(from, from + 999);
+    if (error) { b.loading = false; toast("Could not check the list — " + error.message, "bad"); return; }
     found.push(...(data || []));
+    if (!data || data.length < 1000) break;
   }
   if (S.bulk !== b) return;
   b.found = found;
@@ -2518,8 +2521,10 @@ function recordRow(r) {
    for barcodes alone, so the two can never drift apart. */
 function stockQuery(cols, withCount) {
   const f = S.filters;
-  let qy = S.sb.from("parcels_view")
-    .select(cols, withCount ? { count: "exact" } : undefined);
+  /* A bulk search sends its barcodes in the request body, so thousands fit. */
+  let qy = S.bulk
+    ? S.sb.rpc("parcels_by_barcodes", { p_codes: S.bulk.codes }, withCount ? { count: "exact" } : undefined).select(cols)
+    : S.sb.from("parcels_view").select(cols, withCount ? { count: "exact" } : undefined);
 
   if (f.status) qy = qy.eq("status", f.status);
   if (f.zone) qy = qy.eq("zone", f.zone);
@@ -2528,8 +2533,6 @@ function stockQuery(cols, withCount) {
      a short client number like 65 is also a substring of hundreds of barcodes,
      so asking it as free text buries the answer. */
   if (f.client) qy = qy.eq("client_id", f.client);
-  /* A bulk search is an exact list of barcodes. */
-  if (S.bulk) qy = qy.in("barcode", S.bulk.codes);
 
   /* "Still here" is what the late and long-stay counts mean, so the list has
      to agree with the tile it came from. */
@@ -5321,10 +5324,9 @@ async function loadWaseet() {
   const wTerm = S.waseetQ.trim();
   const wLike = wTerm ? "%" + wTerm.replace(/[%,()]/g, " ") + "%" : null;
 
-  let qy = S.sb.from("parcels_view")
+  let qy = (S.bulk ? S.sb.rpc("parcels_by_barcodes", { p_codes: S.bulk.codes }) : S.sb.from("parcels_view"))
     .select("barcode,name,client_id,customer,phone,cost,paid,status,updated_at")
     .eq("status", "released");
-  if (S.bulk) qy = qy.in("barcode", S.bulk.codes);
   if (S.waseetDate) qy = qy.eq("shipped_at", S.waseetDate);
   if (wLike) {
     qy = qy.or(["phone.ilike." + wLike, "barcode.ilike." + wLike,
