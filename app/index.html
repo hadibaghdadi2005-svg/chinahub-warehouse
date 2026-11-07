@@ -1114,6 +1114,7 @@ function shell(view) {
       if (t.id === S.tab) return;
       const from = list.findIndex(x => x.id === S.tab);
       S.tab = t.id;
+      S.sel.clear(); S.lastTick = null;
       render();
       flyBetween(list.findIndex(x => x.id === t.id) >= from ? 1 : -1);
       /* Load on arrival, so a tab is never opened onto stale counts. */
@@ -2877,7 +2878,7 @@ async function runBulk(call, describe) {
   /* Everything downstream of this is now a step behind. */
   S.stats = null; S.money = null; S.customers = null; S.zoneStats = null;
   loadStats();
-  loadStock();
+  if (S.tab === "sales") loadSales(); else loadStock();
 }
 
 /* ------------------------------------------------------------- download --- */
@@ -3524,8 +3525,10 @@ function vSales() {
   const PAGE = 100;
   const pages = Math.ceil(rows.length / PAGE);
   if (S.soPage >= pages) S.soPage = pages - 1;
+  const pageRows = rows.slice(S.soPage * PAGE, S.soPage * PAGE + PAGE);
+  v.append(salesSelectionHead(pageRows, rows));
   const list = el("div", "list");
-  for (const r of rows.slice(S.soPage * PAGE, S.soPage * PAGE + PAGE)) list.append(salesRow(r));
+  for (const r of pageRows) list.append(salesRow(r, rows));
   v.append(list);
 
   const w = el("div", "row");
@@ -3542,7 +3545,35 @@ function vSales() {
   next.onclick = () => { S.soPage++; render(); };
   w.append(sp, prev, next);
   v.append(w);
+  /* The same bulk actions as Stock: move, mark paid, export. */
+  if (selCount()) v.append(bulkBar());
   return v;
+}
+
+/* Tick a page, or every parcel the filters match — the whole list is already
+   here, so selecting all of it is instant. */
+function salesSelectionHead(pageRows, rows) {
+  const w = el("div", "selhead");
+  const all = el("input");
+  all.type = "checkbox";
+  const codes = pageRows.map(r => r.barcode);
+  const on = codes.filter(b => S.sel.has(b)).length;
+  all.checked = codes.length > 0 && on === codes.length;
+  all.indeterminate = on > 0 && on < codes.length;
+  all.onchange = () => {
+    if (all.checked) codes.forEach(b => S.sel.add(b)); else codes.forEach(b => S.sel.delete(b));
+    render();
+  };
+  w.append(all);
+  w.append(el("span", "li-s", selCount() ? nf0.format(selCount()) + " selected" : "Tick parcels to work on several at once"));
+  if (rows.length > pageRows.length || (selCount() && selCount() < rows.length)) {
+    const more = el("button", "btn sm", "Select all " + nf0.format(rows.length) + " matching");
+    more.type = "button";
+    more.style.marginLeft = "auto";
+    more.onclick = () => { rows.forEach(r => S.sel.add(r.barcode)); toast(nf0.format(S.sel.size) + " selected", "ok"); render(); };
+    w.append(more);
+  }
+  return w;
 }
 
 function salesFilters() {
@@ -3595,9 +3626,26 @@ function salesFilters() {
   return bar;
 }
 
-function salesRow(r) {
-  const li = el("div", "li click");
+function salesRow(r, rows) {
+  const li = el("div", "li click rec st-" + r.status + (S.sel.has(r.barcode) ? " sel" : ""));
   li.onclick = () => openParcel(r.barcode);
+  const box = el("input", "tick");
+  box.type = "checkbox";
+  box.checked = S.sel.has(r.barcode);
+  box.onclick = ev => {
+    ev.stopPropagation();
+    const codes = (rows || []).map(x => x.barcode);
+    const here = codes.indexOf(r.barcode);
+    if (ev.shiftKey && S.lastTick != null && here >= 0) {
+      const from = Math.min(S.lastTick, here), to = Math.max(S.lastTick, here);
+      for (let i = from; i <= to; i++) box.checked ? S.sel.add(codes[i]) : S.sel.delete(codes[i]);
+    } else {
+      box.checked ? S.sel.add(r.barcode) : S.sel.delete(r.barcode);
+    }
+    S.lastTick = here;
+    render();
+  };
+  li.append(box);
   const m = el("div", "li-m");
   const nm = el("div", "li-nm");
   nm.append(el("span", "mono", r.barcode), copyBtn(r.barcode));
