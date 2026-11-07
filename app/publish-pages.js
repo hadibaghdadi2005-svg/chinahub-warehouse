@@ -20,7 +20,7 @@ const { execFileSync } = require("child_process");
 const REPO = "https://github.com/hadibaghdadi2005-svg/chinahub-warehouse-app.git";
 const LIVE = "https://hadibaghdadi2005-svg.github.io/chinahub-warehouse-app/";
 const FILES = [
-  "index.html", "sw.js", "manifest.webmanifest",
+  "index.html", "sw.js", "manifest.webmanifest", "icon-180.png",
   "logo.png", "logo-mark.png", "icon-192.png", "icon-512.png", "icon-maskable-512.png",
 ];
 const why = process.argv[2] || "Update the app";
