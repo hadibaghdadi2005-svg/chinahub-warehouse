@@ -573,6 +573,17 @@ main.enter .zbar i{animation:grow 1s .25s cubic-bezier(.2,.8,.2,1) both;transfor
 .acct-row{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
 .acct-row b{overflow-wrap:anywhere;text-align:right}
 
+.copy{
+  display:inline-grid;place-items:center;width:26px;height:26px;padding:0;margin-left:-2px;
+  border:1px solid transparent;border-radius:7px;background:transparent;color:var(--fg-faint);
+  cursor:pointer;flex:none;transition:background-color .15s,color .15s,border-color .15s,transform .15s;
+}
+.copy:hover{background:var(--surface-3);color:var(--primary);border-color:var(--line)}
+.copy:active{transform:scale(.88)}
+.copy.done{color:var(--ok);background:color-mix(in srgb,var(--ok) 14%,transparent);animation:tabpop .4s cubic-bezier(.3,1.6,.5,1)}
+.dt-code{display:flex;align-items:center;gap:6px}
+.dt .dt-code b{display:inline}
+
 /* ---------- phones ----------
    iPhone Safari zooms into any field under 16px when it is tapped, and the
    page then stays zoomed. Every typing field is 16px on a phone. */
@@ -1311,6 +1322,37 @@ function feedPush(kind, bc, msg, undoable) {
   S.scanTally[kind === "ok" ? "ok" : kind === "warn" ? "warn" : "bad"]++;
 }
 
+/* A small copy button beside a barcode. It copies without opening the row it
+   sits in, and turns into a tick for a moment so you know it worked. */
+const COPY_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/>' +
+  '<path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>';
+const TICK_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>';
+function copyBtn(text) {
+  const b = el("button", "copy");
+  b.type = "button";
+  b.title = "Copy " + text;
+  b.setAttribute("aria-label", "Copy " + text);
+  b.innerHTML = COPY_SVG;
+  b.onclick = async ev => {
+    ev.stopPropagation(); ev.preventDefault();
+    let ok = false;
+    try { await navigator.clipboard.writeText(String(text)); ok = true; } catch (_) {
+      /* Older browsers and plain http: copy through a hidden text box. */
+      try {
+        const t = document.createElement("textarea");
+        t.value = String(text); t.style.cssText = "position:fixed;opacity:0";
+        document.body.append(t); t.select(); ok = document.execCommand("copy"); t.remove();
+      } catch (_) {}
+    }
+    if (!ok) { toast("Could not copy", "bad"); return; }
+    b.classList.add("done"); b.innerHTML = TICK_SVG;
+    setTimeout(() => { b.classList.remove("done"); b.innerHTML = COPY_SVG; }, 1200);
+  };
+  return b;
+}
+
 /* Small line icons for the scan modes. Static markup, nothing from a scan. */
 const MODE_ICON = {
   receive: '<path d="M12 3v11"/><path d="m7 9 5 5 5-5"/><path d="M4 16v4h16v-4"/>',
@@ -1785,7 +1827,7 @@ function vScan() {
       li.onclick = () => openParcel(f.bc);
       const m = el("div", "li-m");
       const nm = el("div", "li-nm");
-      nm.append(el("span", "mono", f.bc));
+      nm.append(el("span", "mono", f.bc), copyBtn(f.bc));
       nm.append(el("span", "chip " + (f.kind === "ok" ? "s-delivered" : f.kind === "warn" ? "s-received" : "off"),
         f.kind === "ok" ? "Done" : f.kind === "warn" ? "Skipped" : "No"));
       m.append(nm);
@@ -1990,7 +2032,7 @@ function vCallCenterStock() {
         pr.onclick = ev => { ev.stopPropagation(); openParcel(r.barcode); };
         const pm = el("div", "li-m");
         const pnm = el("div", "li-nm");
-        pnm.append(el("span", "mono", r.barcode));
+        pnm.append(el("span", "mono", r.barcode), copyBtn(r.barcode));
         pnm.append(el("span", "chip s-" + r.status, STATUS[r.status] || r.status));
         pm.append(pnm);
         const bits = [];
@@ -2240,7 +2282,7 @@ function recordRow(r) {
   li.append(box);
   const m = el("div", "li-m");
   const nm = el("div", "li-nm");
-  nm.append(el("span", "mono", r.barcode));
+  nm.append(el("span", "mono", r.barcode), copyBtn(r.barcode));
   nm.append(el("span", "chip s-" + r.status, STATUS[r.status] || r.status));
   m.append(nm);
   const bits = [];
@@ -3350,7 +3392,7 @@ function salesRow(r) {
   li.onclick = () => openParcel(r.barcode);
   const m = el("div", "li-m");
   const nm = el("div", "li-nm");
-  nm.append(el("span", "mono", r.barcode));
+  nm.append(el("span", "mono", r.barcode), copyBtn(r.barcode));
   nm.append(el("span", "chip s-" + r.status, STATUS[r.status] || r.status));
   m.append(nm);
   const bits = [];
@@ -3737,7 +3779,9 @@ function vDrawer() {
   const p = d.parcel;
   const head = el("div", "dhead");
   const dt = el("div", "dt");
-  dt.append(el("b", "mono", p.barcode));
+  const code = el("div", "dt-code");
+  code.append(el("b", "mono", p.barcode), copyBtn(p.barcode));
+  dt.append(code);
   dt.append(el("span", null, p.name || "No description recorded"));
   const chips = el("div", "row");
   chips.style.marginTop = "7px";
@@ -4992,7 +5036,7 @@ function vWaseet() {
       li.append(cb);
       const m = el("div", "li-m");
       const nm = el("div", "li-nm");
-      nm.append(el("span", "mono", r.barcode));
+      nm.append(el("span", "mono", r.barcode), copyBtn(r.barcode));
       nm.append(el("span", "chip " + (r.paid ? "s-delivered" : "off"), r.paid ? "Paid" : "Unpaid"));
       m.append(nm);
       li.append(m);
@@ -6211,7 +6255,7 @@ function scanSection() {
             const li = el("div", "li");
             const main = el("div", "li-m");
             const nm = el("div", "li-nm");
-            nm.append(el("span", "mono", m.barcode));
+            nm.append(el("span", "mono", m.barcode), copyBtn(m.barcode));
             if (m.client_id) nm.append(el("span", "chip", m.client_id));
             main.append(nm);
             if (m.customer || m.shelf) main.append(el("div", "li-s",
