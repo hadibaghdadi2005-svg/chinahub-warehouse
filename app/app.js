@@ -4843,9 +4843,14 @@ function backupCard() {
   b.disabled = !!S.backupBusy;
   b.onclick = async () => {
     S.backupBusy = true; render();
-    const { data, error } = await S.sb.rpc("full_backup");
+    /* One table at a time keeps each request short. */
+    const data = { taken_at: new Date().toISOString(), project: "baghdedi-warehouse" };
+    for (const t of ["parcels", "parcel_events", "shipments", "zones", "monthly_rates", "profiles", "settings"]) {
+      const { data: rows, error } = await S.sb.rpc("backup_table", { p_table: t });
+      if (error) { S.backupBusy = false; render(); toast("Could not back up " + t + " — " + error.message, "bad"); return; }
+      data[t] = rows || [];
+    }
     S.backupBusy = false; render();
-    if (error) { toast("Could not make the backup — " + error.message, "bad"); return; }
     const name = "warehouse-backup-" + new Date().toISOString().slice(0, 10) + ".json";
     if (offerFile(name, JSON.stringify(data), "application/json"))
       toast("Backup downloaded: " + nf0.format((data.parcels || []).length) + " parcels", "ok");
