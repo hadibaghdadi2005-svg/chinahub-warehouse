@@ -7274,7 +7274,14 @@ async function boot() {
   }
   if (isAdmin()) loadStaff();
 
-  S.sb.auth.onAuthStateChange(async (evt, session) => {
+  /* The handler must not call the database while the auth library is still
+     inside its own callback: signing in by username (setSession) holds a lock
+     there, and a query that waits for it never returns. So step out first. */
+  S.sb.auth.onAuthStateChange((evt, session) => { setTimeout(() => onAuth(evt, session), 0); });
+}
+
+async function onAuth(evt, session) {
+  {
     const was = S.session?.user?.id || null;
     S.session = session || null;
     if ((S.session?.user?.id || null) !== was) {
@@ -7299,7 +7306,7 @@ async function boot() {
       }
       if (isAdmin()) loadStaff();
     }
-  });
+  }
 }
 
 boot().catch(e => {
