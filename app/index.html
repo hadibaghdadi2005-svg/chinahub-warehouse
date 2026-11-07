@@ -2523,7 +2523,9 @@ function stockQuery(cols, withCount) {
   const f = S.filters;
   /* A bulk search sends its barcodes in the request body, so thousands fit. */
   let qy = S.bulk
-    ? S.sb.rpc("parcels_by_barcodes", { p_codes: S.bulk.codes }, withCount ? { count: "exact" } : undefined).select(cols)
+    ? S.sb.rpc("parcels_by_barcodes", { p_codes: S.bulk.codes }, withCount ? { count: "exact" } : undefined)
+        /* Through a function the list can only sort on columns it fetches. */
+        .select(/(^|,)updated_at(,|$)/.test(cols) ? cols : cols + ",updated_at")
     : S.sb.from("parcels_view").select(cols, withCount ? { count: "exact" } : undefined);
 
   if (f.status) qy = qy.eq("status", f.status);
