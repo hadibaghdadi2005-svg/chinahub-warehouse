@@ -456,6 +456,12 @@ function shell(view) {
   brand.append(bt);
 
   const who = el("div", "who");
+  const sb = el("button", "btn sm hsearch");
+  sb.type = "button";
+  sb.title = "Search parcels, clients, shipments (press /)";
+  sb.append(navIcon("search"), el("span", "hsearch-t", "Search"), el("kbd", null, "/"));
+  sb.onclick = openSearch;
+  who.append(sb);
   who.append(roleChip(S.me.role));
   const acc = el("button", "btn sm", "Account");
   acc.onclick = openAccount;
@@ -466,46 +472,13 @@ function shell(view) {
 
   const tabs = el("nav", "tabs gut");
   const list = visibleTabs();
+  let lastGroup = null;
   for (const t of list) {
+    if (lastGroup && t.group !== lastGroup) tabs.append(el("span", "tab-sep"));
+    lastGroup = t.group;
     const b = el("button", "tab" + (entering && t.id === S.tab ? " pop" : ""), t.label);
     if (t.id === S.tab) b.setAttribute("aria-current", "page");
-    b.onclick = () => {
-      if (t.id === S.tab) return;
-      const from = list.findIndex(x => x.id === S.tab);
-      S.tab = t.id;
-      S.sel.clear(); S.lastTick = null;
-      render();
-      flyBetween(list.findIndex(x => x.id === t.id) >= from ? 1 : -1);
-      /* Load on arrival, so a tab is never opened onto stale counts. */
-      if (t.id === "stock") {
-        if (isCallCenter()) { if (!S.ccData) loadCallCenterStock(); }
-        else { if (!S.stats) loadStats(); if (!S.rows) loadStock(); }
-      }
-      if (t.id === "zones" && !S.zoneStats) loadZoneStats();
-      /* Always fresh: a payment taken elsewhere must show here straight away. */
-      if (t.id === "sales") { loadSales(); if (!S.stats) loadStats(); if (!S.money) loadMoney(); }
-      if (t.id === "money") {
-        if (!S.money) loadMoney();
-        if (!S.cfg) loadCfg();
-        if (!S.customers) loadCustomers();
-      }
-      if (t.id === "setup" && !S.cfg) loadCfg();
-      if (t.id === "shipping") {
-        if (!S.ships) loadShipments();
-        if (!S.shipStats) loadShipStats();
-      }
-      if (t.id === "labels") {
-        if (!S.labelShips) loadLabelShipments();
-      }
-      if (t.id === "summary") {
-        if (!S.money) loadMoney();
-        if (!S.shipStats) loadShipStats();
-        if (!S.summaryData) loadSummary();
-      }
-      if (t.id === "waseet") {
-        if (!S.waseetData) loadWaseet();
-      }
-    };
+    b.onclick = () => goTab(t.id);
     tabs.append(b);
   }
   top.append(tabs);
@@ -513,6 +486,7 @@ function shell(view) {
   const main = el("main", "gut" + (entering ? " enter" : ""));
   main.append(view);
   frag.append(top, main);
+  if (list.length > 1) frag.append(bottomNav(list));
   return frag;
 }
 
@@ -594,24 +568,358 @@ function flyBetween(dir) {
   raf = requestAnimationFrame(frame);
 }
 
+/* Sections, in groups: Home, then the warehouse floor, money, shipping and
+   admin. The groups are what the phone's "More" sheet shows, and on a wide
+   screen a thin line separates them in the row. */
+const TAB_GROUPS = { home: "", warehouse: "Warehouse", money: "Money", shipping: "Shipping", admin: "Admin" };
 function visibleTabs() {
   if (isCallCenter()) return [
-    { id: "stock", label: "Stock" },
+    { id: "stock", label: "Stock", group: "warehouse" },
   ];
   const t = [
-    { id: "scan", label: "Scan" },
-    { id: "stock", label: "Stock" },
-    { id: "zones", label: "Zones" },
+    { id: "home", label: "Home", group: "home" },
+    { id: "scan", label: "Scan", group: "warehouse" },
+    { id: "stock", label: "Stock", group: "warehouse" },
+    { id: "zones", label: "Zones", group: "warehouse" },
   ];
-  if (sees_money()) t.push({ id: "money", label: "Money" });
-  if (canExport()) t.push({ id: "sales", label: "Sales Orders" });
-  if (sees_money()) t.push({ id: "shipping", label: "Shipping" });
-  if (sees_money()) t.push({ id: "summary", label: "Summary" });
-  if (sees_money()) t.push({ id: "waseet", label: "Waseet" });
-  if (sees_money()) t.push({ id: "setup", label: "Setup" });
-  t.push({ id: "labels", label: "Labels" });
-  if (isAdmin()) t.push({ id: "staff", label: "Staff" });
+  if (sees_money()) t.push({ id: "money", label: "Money", group: "money" });
+  if (canExport()) t.push({ id: "sales", label: "Sales Orders", group: "money" });
+  if (sees_money()) t.push({ id: "waseet", label: "Waseet", group: "money" });
+  if (sees_money()) t.push({ id: "summary", label: "Summary", group: "money" });
+  if (sees_money()) t.push({ id: "shipping", label: "Shipping", group: "shipping" });
+  t.push({ id: "labels", label: "Labels", group: "shipping" });
+  if (sees_money()) t.push({ id: "setup", label: "Setup", group: "admin" });
+  if (isAdmin()) t.push({ id: "staff", label: "Staff", group: "admin" });
   return t;
+}
+
+const TAB_ICON = {
+  home:  '<path d="M3 11 12 4l9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/>',
+  scan:  '<path d="M4 5v14M7 5v14M10 5v14M14 5v14M16 5v14M20 5v14"/>',
+  stock: '<path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/>',
+  search:'<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  more:  '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
+};
+function navIcon(name) {
+  const i = el("span", "nico");
+  i.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (TAB_ICON[name] || "") + "</svg>";
+  return i;
+}
+
+/* Going to a section, from anywhere: the row, the phone bar, "More", search. */
+function goTab(id) {
+  if (id === S.tab) return;
+  const list = visibleTabs();
+  if (!list.some(x => x.id === id)) return;
+  const from = list.findIndex(x => x.id === S.tab);
+  S.tab = id;
+  S.sel.clear(); S.lastTick = null;
+  render();
+  flyBetween(list.findIndex(x => x.id === id) >= from ? 1 : -1);
+  /* Load on arrival, so a section is never opened onto stale counts. */
+  if (id === "home") loadHome();
+  if (id === "stock") {
+    if (isCallCenter()) { if (!S.ccData) loadCallCenterStock(); }
+    else { if (!S.stats) loadStats(); if (!S.rows) loadStock(); }
+  }
+  if (id === "zones" && !S.zoneStats) loadZoneStats();
+  /* Always fresh: a payment taken elsewhere must show here straight away. */
+  if (id === "sales") { loadSales(); if (!S.stats) loadStats(); if (!S.money) loadMoney(); }
+  if (id === "money") {
+    if (!S.money) loadMoney();
+    if (!S.cfg) loadCfg();
+    if (!S.customers) loadCustomers();
+  }
+  if (id === "setup" && !S.cfg) loadCfg();
+  if (id === "shipping") {
+    if (!S.ships) loadShipments();
+    if (!S.shipStats) loadShipStats();
+  }
+  if (id === "labels" && !S.labelShips) loadLabelShipments();
+  if (id === "summary") {
+    if (!S.money) loadMoney();
+    if (!S.shipStats) loadShipStats();
+    if (!S.summaryData) loadSummary();
+  }
+  if (id === "waseet" && !S.waseetData) loadWaseet();
+}
+
+/* The phone's bottom bar: Home, Scan, Stock, Search, More. */
+function bottomNav(list) {
+  const nav = el("nav", "bnav");
+  const item = (id, label, onclick, on) => {
+    const b = el("button", "bnav-i" + (on ? " on" : ""));
+    b.type = "button";
+    b.append(navIcon(id), el("span", null, label));
+    b.onclick = onclick;
+    nav.append(b);
+  };
+  const has = id => list.some(t => t.id === id);
+  if (has("home")) item("home", "Home", () => goTab("home"), S.tab === "home");
+  if (has("scan")) item("scan", "Scan", () => goTab("scan"), S.tab === "scan");
+  item("stock", "Stock", () => goTab("stock"), S.tab === "stock");
+  item("search", "Search", openSearch, false);
+  const main = ["home", "scan", "stock"];
+  item("more", "More", () => openMore(list), !main.includes(S.tab));
+  return nav;
+}
+
+/* Every section, grouped, as a sheet. */
+function openMore(list) {
+  const scrim = el("div", "scrim");
+  const m = el("div", "modal more");
+  m.append(el("h3", null, "All sections"));
+  for (const g of Object.keys(TAB_GROUPS)) {
+    const items = list.filter(t => t.group === g && g !== "home");
+    if (!items.length) continue;
+    m.append(el("div", "sect-t more-h", TAB_GROUPS[g]));
+    const grid = el("div", "more-g");
+    for (const t of items) {
+      const b = el("button", "btn more-b" + (t.id === S.tab ? " pri" : ""), t.label);
+      b.type = "button";
+      b.onclick = () => { scrim.remove(); goTab(t.id); };
+      grid.append(b);
+    }
+    m.append(grid);
+  }
+  scrim.append(m);
+  scrim.addEventListener("click", e => { if (e.target === scrim) scrim.remove(); });
+  document.body.append(scrim);
+}
+
+/* ------------------------------------------------------------- search --- */
+/* One box that finds a parcel, a client or a shipment from any section.
+   Press "/" anywhere (when not typing) to open it. */
+function openSearch() {
+  if (document.querySelector(".gsearch")) return;
+  const scrim = el("div", "scrim gsearch");
+  const m = el("div", "modal gs");
+  const inp = el("input", "inp mono");
+  inp.placeholder = "Parcel number, client number, name or phone, shipment…";
+  inp.autocomplete = "off"; inp.autocapitalize = "off"; inp.spellcheck = false;
+  inp.enterKeyHint = "search";
+  m.append(inp);
+  const res = el("div", "gs-res");
+  res.append(el("div", "li-s gs-hint", "Type at least 2 characters."));
+  m.append(res);
+  scrim.append(m);
+  const close = () => { scrim.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = e => { if (e.key === "Escape") close(); };
+  document.addEventListener("keydown", onKey);
+  scrim.addEventListener("click", e => { if (e.target === scrim) close(); });
+  document.body.append(scrim);
+  inp.focus();
+
+  let timer = 0, seq = 0;
+  const run = async () => {
+    const q = inp.value.trim();
+    if (q.length < 2) { res.replaceChildren(el("div", "li-s gs-hint", "Type at least 2 characters.")); return; }
+    const mine = ++seq;
+    res.replaceChildren(el("div", "li-s gs-hint", "Searching…"));
+    const { data, error } = await S.sb.rpc("global_search", { p_q: q });
+    if (mine !== seq) return;
+    if (error) { res.replaceChildren(banner("bad", "Search failed", error.message)); return; }
+    const d = data || {};
+    res.replaceChildren();
+    const section = (title, rows, row) => {
+      if (!rows || !rows.length) return;
+      res.append(el("div", "sect-t gs-h", title));
+      const list = el("div", "list");
+      rows.forEach(r => list.append(row(r)));
+      res.append(list);
+    };
+    section("Parcels", d.parcels, p => {
+      const li = el("div", "li click rec st-" + p.status);
+      const mm = el("div", "li-m");
+      const nm = el("div", "li-nm");
+      nm.append(el("span", "mono", p.barcode), copyBtn(p.barcode),
+        el("span", "chip s-" + p.status, STATUS[p.status] || p.status));
+      mm.append(nm);
+      const sub = el("div", "li-s");
+      sub.append(el("span", "loc mono", "at " + (p.shelf || p.zone || "—")));
+      const bits = [];
+      if (p.customer) bits.push(p.customer + (p.client_id ? " (" + p.client_id + ")" : ""));
+      if (p.name) bits.push(p.name.length > 40 ? p.name.slice(0, 40) + "…" : p.name);
+      if (bits.length) sub.append(document.createTextNode("  " + bits.join("  ·  ")));
+      mm.append(sub);
+      li.append(mm);
+      li.onclick = () => { close(); openParcel(p.barcode); };
+      return li;
+    });
+    section("Clients", d.clients, c => {
+      const li = el("div", "li click");
+      const mm = el("div", "li-m");
+      const nm = el("div", "li-nm");
+      nm.append(el("span", null, c.customer || "Client " + c.client_id), el("span", "loc mono", c.client_id));
+      mm.append(nm);
+      mm.append(el("div", "li-s", nf0.format(c.parcels) + " parcels · " + nf0.format(c.here) + " in the warehouse" +
+        (c.phone ? " · " + c.phone : "")));
+      li.append(mm);
+      li.onclick = () => {
+        close();
+        S.q = ""; S.bulk = null;
+        S.filters = { status: "", zone: "", paid: "", client: c.client_id };
+        if (S.tab !== "stock") goTab("stock");
+        applyFilters();
+      };
+      return li;
+    });
+    section("Shipments", d.shipments, sh => {
+      const li = el("div", "li click");
+      const mm = el("div", "li-m");
+      const nm = el("div", "li-nm");
+      nm.append(el("span", "mono", "SHIP-" + sh.ship_num), el("span", null, sh.client || sh.code || ""));
+      mm.append(nm);
+      mm.append(el("div", "li-s", [sh.mode, sh.boxes ? sh.boxes + " cartons" : "", sh.shelf || sh.zone ? "at " + (sh.shelf || sh.zone) : ""]
+        .filter(Boolean).join("  ·  ")));
+      li.append(mm);
+      li.onclick = () => {
+        close();
+        S.shipQ = String(sh.ship_num); S.bulk = null;
+        if (S.tab !== "shipping") goTab("shipping");
+        loadShipments();
+      };
+      return li;
+    });
+    if (!res.children.length) res.append(el("div", "empty", "Nothing matches “" + q + "”."));
+  };
+  inp.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(run, 250); });
+  inp.addEventListener("keydown", e => { if (e.key === "Enter") { clearTimeout(timer); run(); } });
+}
+
+document.addEventListener("keydown", e => {
+  if (e.key !== "/" || !S.me) return;
+  const t = e.target && e.target.tagName;
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(t || "") || (e.target && e.target.isContentEditable)) return;
+  e.preventDefault();
+  openSearch();
+});
+
+/* --------------------------------------------------------------- home --- */
+async function loadHome() {
+  S.homeBusy = true; render();
+  const { data, error } = await S.sb.rpc("home_summary");
+  S.homeBusy = false;
+  if (error) { toast("Could not load Home — " + error.message, "bad"); render(); return; }
+  S.home = data || null;
+  S.homeAt = new Date();
+  render();
+}
+
+function vHome() {
+  const v = el("section");
+  const head = el("div", "vhead");
+  const h = el("div");
+  const hr = new Date().getHours();
+  const hello = hr < 12 ? "Good morning" : hr < 18 ? "Good afternoon" : "Good evening";
+  h.append(el("h2", null, hello + ", " + (S.me.name || "").split(" ")[0]));
+  h.append(el("div", "sub", new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" }) +
+    (S.homeAt ? " · updated " + S.homeAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "")));
+  head.append(h);
+  const rf = el("button", "btn sm", S.homeBusy ? "Refreshing…" : "Refresh");
+  rf.style.marginLeft = "auto";
+  rf.disabled = !!S.homeBusy;
+  rf.onclick = loadHome;
+  head.append(rf);
+  const se = el("button", "btn sm", "Search  /");
+  se.onclick = openSearch;
+  head.append(se);
+  v.append(head);
+
+  const d = S.home;
+  if (!d) {
+    const e = el("div", "empty");
+    e.append(el("span", "spin"), el("div", null, "Loading…"));
+    v.append(e);
+    if (!S.homeBusy) setTimeout(loadHome, 0);
+    return v;
+  }
+  const n = x => nf0.format(Number(x) || 0);
+  const tile = (k, val, note, go, colour) => {
+    const b = el(go ? "button" : "div", "tile");
+    b.append(el("div", "k", k));
+    const vv = el("div", "v", val);
+    if (colour) vv.style.color = colour;
+    b.append(vv);
+    if (note) b.append(el("div", "n", note));
+    if (go) b.onclick = go;
+    return b;
+  };
+  const toStock = f => () => {
+    S.q = ""; S.bulk = null;
+    S.filters = Object.assign({ status: "", zone: "", paid: "" }, f);
+    goTab("stock");
+    applyFilters();
+  };
+
+  v.append(el("div", "sect-t home-h", "Right now"));
+  const now = el("div", "tiles");
+  now.append(
+    tile("In the warehouse", n(d.in_warehouse), n(d.on_shelves) + " on shelves · " + n(d.not_shelved) + " not shelved", toStock({ here: true })),
+    tile("On the way", n(d.on_the_way), "not arrived yet", toStock({ status: "expected" })),
+    tile("At " + branchLabel(), n(d.at_branch), "waiting to be collected", toStock({ status: "at_branch" })),
+    tile("With Waseet", n(d.with_waseet), "cash on delivery", sees_money() ? () => goTab("waseet") : toStock({ status: "released" })),
+    tile("Over free days", n(d.late), "past " + d.free_days + " days", toStock({ paid: "late" }), "var(--warn)"),
+    tile("Here too long", n(d.long), d.long_days + "+ days" + (d.long_owed != null ? " · " + money(d.long_owed) + " owed" : ""),
+      toStock({ paid: "long" }), "var(--danger)"),
+  );
+  if (d.unpaid_amount != null)
+    now.append(tile("Unpaid", money(d.unpaid_amount), n(d.unpaid_count) + " parcels in the warehouse", toStock({ paid: "unpaid" }), "var(--danger)"));
+  if (Number(d.unpriced))
+    now.append(tile("Not priced", n(d.unpriced), "in the warehouse with no charge", null, "var(--fg-dim)"));
+  v.append(now);
+
+  const t = d.today || {};
+  v.append(el("div", "sect-t home-h", "Today"));
+  const today = el("div", "tiles");
+  today.append(
+    tile("Received", n(t.received), "arrived at the hub"),
+    tile("Put on shelves", n(t.shelved), "scanned onto a shelf"),
+    tile("Sent out", n((Number(t.at_branch) || 0) + (Number(t.released) || 0)),
+      n(t.at_branch) + " to " + branchLabel() + " · " + n(t.released) + " to Waseet"),
+    tile("Delivered", n(t.delivered), "handed over", null, "var(--ok)"),
+  );
+  v.append(today);
+
+  const cols = el("div", "home-cols");
+  const ppl = el("div", "card pad");
+  ppl.append(el("div", "sect-t", "Who did what today"));
+  if (!d.people.length) ppl.append(el("div", "li-s home-empty", "Nothing recorded yet today."));
+  for (const p of d.people) {
+    const r = el("div", "home-p");
+    r.append(el("b", null, p.name));
+    const bits = [];
+    if (p.received) bits.push(n(p.received) + " received");
+    if (p.shelved) bits.push(n(p.shelved) + " shelved");
+    if (p.sent_out) bits.push(n(p.sent_out) + " sent out");
+    if (p.delivered) bits.push(n(p.delivered) + " delivered");
+    r.append(el("span", "li-s", bits.join(" · ") || n(p.total) + " changes"));
+    r.append(el("span", "home-n", n(p.total)));
+    ppl.append(r);
+  }
+  cols.append(ppl);
+
+  const act = el("div", "card pad");
+  act.append(el("div", "sect-t", "Latest activity"));
+  const list = el("div", "home-act");
+  for (const e of d.recent) {
+    const r = el("div", "home-a");
+    r.append(el("span", "li-s mono home-t", new Date(e.at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })));
+    const body = el("div", "home-ab");
+    const top = el("div", "li-nm");
+    top.append(el("span", "mono", e.barcode), copyBtn(e.barcode));
+    if (e.to_status) top.append(el("span", "chip s-" + e.to_status, STATUS[e.to_status] || e.to_status));
+    body.append(top);
+    body.append(el("div", "li-s", e.name + (e.loc ? " · " + e.loc : "") + (e.note ? " · " + e.note : "")));
+    r.append(body);
+    r.onclick = () => openParcel(e.barcode);
+    list.append(r);
+  }
+  act.append(list);
+  cols.append(act);
+  v.append(cols);
+  return v;
 }
 
 function roleChip(role) {
@@ -6787,6 +7095,7 @@ function render() {
              : S.tab === "labels" ? vLabels()
              : S.tab === "stock" ? vStock()
              : S.tab === "zones" ? vZones()
+             : S.tab === "home" && !isCallCenter() ? vHome()
              : vScan();
   app.replaceChildren(shell(view));
   const dr = vDrawer();
@@ -6921,6 +7230,7 @@ async function boot() {
   S.session = data.session || null;
   if (S.session) await loadMe();
   if (isCallCenter()) S.tab = "stock";
+  else if (sees_money() && S.tab === "scan") S.tab = "home";
   render();
   if (S.me) {
     loadBrand(); loadZones();
@@ -6950,13 +7260,15 @@ async function onAuth(evt, session) {
       S.ships = null; S.shipStats = null; S.shipQ = "";
       S.shipFilters = { mode: "", paid: "" }; S.shipSel = new Set();
       S.ccData = null; S.ccOpen = new Set(); S.ccQ = "";
-      S.bulk = null; S.soData = null; S.soQ = ""; S.soStatus = ""; S.soPay = ""; S.soMonth = ""; S.soPage = 0;
+      S.bulk = null; S.home = null; S.soData = null; S.soQ = ""; S.soStatus = ""; S.soPay = ""; S.soMonth = ""; S.soPage = 0;
       if (S.session) await loadMe();
       if (isCallCenter()) S.tab = "stock";
+      else if (sees_money() && S.tab === "scan") S.tab = "home";
       render();
       if (S.me) {
         loadBrand(); loadZones();
         if (isCallCenter()) loadCallCenterStock(); else loadStats();
+        if (S.tab === "home") loadHome();
       }
       if (isAdmin()) loadStaff();
     }

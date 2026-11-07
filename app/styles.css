@@ -573,6 +573,38 @@ main.enter .zbar i{animation:grow 1s .25s cubic-bezier(.2,.8,.2,1) both;transfor
 .bulkcode{display:inline-flex;align-items:center;gap:2px;padding:2px 4px 2px 9px;border-radius:8px;
   background:var(--danger-wash);color:var(--danger);font-size:12.5px}
 
+/* ---------- grouped sections, bottom bar, search, home ---------- */
+.tab-sep{flex:none;width:1px;align-self:center;height:18px;background:var(--line-strong);margin:0 6px}
+.nico{display:inline-grid;place-items:center;flex:none}
+.hsearch{gap:6px;color:var(--fg-dim)}
+.hsearch kbd{font-family:var(--mono);font-size:11px;padding:0 5px;border:1px solid var(--line-strong);border-radius:5px;color:var(--fg-faint)}
+.hsearch .nico svg{width:16px;height:16px}
+.bnav{display:none}
+.gsearch{place-items:start center;padding-top:max(60px,8vh)}
+.modal.gs{width:min(640px,100%);display:flex;flex-direction:column;gap:12px;max-height:80dvh}
+.gs .inp{font-size:17px;min-height:52px}
+.gs-res{overflow:auto;display:flex;flex-direction:column;gap:6px;min-height:40px}
+.gs-h{margin-top:6px}
+.gs-hint{padding:6px 2px}
+.more .more-h{margin:14px 0 8px}
+.more-g{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.more-b{justify-content:flex-start}
+.home-h{margin:6px 0 8px}
+.home-cols{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr);gap:12px;margin-top:6px}
+@media (max-width:900px){.home-cols{grid-template-columns:1fr}}
+.home-cols .sect-t{display:block;margin-bottom:10px}
+.home-p{display:grid;grid-template-columns:1fr auto;gap:2px 10px;padding:9px 0;border-top:1px solid var(--line)}
+.home-p:first-of-type{border-top:0}
+.home-p .li-s{grid-column:1}
+.home-n{grid-column:2;grid-row:1 / span 2;align-self:center;font-weight:800;font-size:20px;color:var(--primary)}
+.home-act{display:flex;flex-direction:column}
+.home-a{display:flex;gap:12px;align-items:flex-start;padding:9px 4px;border-top:1px solid var(--line);cursor:pointer;border-radius:8px}
+.home-a:first-child{border-top:0}
+.home-a:hover{background:var(--surface-2)}
+.home-t{min-width:96px;padding-top:3px}
+.home-ab{min-width:0}
+.home-empty{padding:6px 0}
+
 /* ---------- phones ----------
    iPhone Safari zooms into any field under 16px when it is tapped, and the
    page then stays zoomed. Every typing field is 16px on a phone. */
@@ -620,6 +652,28 @@ main.enter .zbar i{animation:grow 1s .25s cubic-bezier(.2,.8,.2,1) both;transfor
   .dfoot .btn{flex:1 1 auto}
   .bulkbar{left:0;right:0}
   .toasts{bottom:calc(14px + env(safe-area-inset-bottom,0px))}
+}
+@media (max-width:760px){
+  /* On a phone the row of sections gives way to a bar at the bottom. */
+  .tabs{display:none}
+  .bnav{
+    display:grid;grid-auto-flow:column;grid-auto-columns:1fr;position:fixed;left:0;right:0;bottom:0;z-index:60;
+    background:color-mix(in srgb,var(--surface) 92%,transparent);
+    -webkit-backdrop-filter:saturate(1.4) blur(14px);backdrop-filter:saturate(1.4) blur(14px);
+    border-top:1px solid var(--line);
+    padding:6px max(6px,env(safe-area-inset-right,0px)) calc(6px + env(safe-area-inset-bottom,0px)) max(6px,env(safe-area-inset-left,0px));
+  }
+  .bnav-i{display:flex;flex-direction:column;align-items:center;gap:2px;border:0;background:none;color:var(--fg-faint);
+    font-size:11px;font-weight:700;padding:5px 2px;border-radius:12px;transition:color .18s,background-color .18s}
+  .bnav-i.on{color:var(--primary);background:var(--primary-wash)}
+  .bnav-i:active{transform:scale(.94)}
+  main{padding-bottom:calc(90px + env(safe-area-inset-bottom,0px))}
+  .bulkbar{bottom:calc(76px + env(safe-area-inset-bottom,0px))}
+  .toasts{bottom:calc(84px + env(safe-area-inset-bottom,0px))}
+  .hsearch .hsearch-t,.hsearch kbd{display:none}
+  .gsearch{place-items:end center;padding:0}
+  .modal.gs{max-height:88dvh}
+  .home-t{min-width:0}
 }
 @keyframes sheet{from{transform:translateY(100%)}to{transform:none}}
 /* Touch screens keep a hover state after a tap; do not leave things lifted. */
