@@ -17,7 +17,7 @@ const path = require("path");
 const vm = require("vm");
 
 const html = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
-let mod = html.match(/<script type="module">([\s\S]*?)<\/script>/)[1];
+let mod = fs.readFileSync(path.join(__dirname, "app.js"), "utf8");
 mod = mod.replace(/^\s*import\s[\s\S]*?;\s*$/m, "");   /* the CDN import */
 
 /* ------------------------------------------------------------------ DOM --- */
@@ -658,7 +658,10 @@ if (/\$|25\.01|39,344|11,503|Unpaid/.test(scannerText)) {
  */
 const orBlock = (mod.match(/qy\.or\(\[([\s\S]*?)\]\.join/) || [])[1] || "";
 const searched = [...orBlock.matchAll(/"([a-z_]+)\.ilike\./g)].map(m => m[1]);
-const placeholder = (mod.match(/q\.placeholder\s*=\s*"([^"]*)"/) || [])[1] || "";
+/* Stock's own search box: the placeholder inside stockFilters(), not the
+   first search box in the file (other sections have their own). */
+const stockFiltersSrc = (mod.match(/function stockFilters\(\)[\s\S]*?\n}\n/) || [""])[0];
+const placeholder = (stockFiltersSrc.match(/q\.placeholder\s*=\s*"([^"]*)"/) || [])[1] || "";
 
 const PROMISED = {
   barcode: "Barcode", client_id: "client number", customer: "customer",
@@ -745,7 +748,7 @@ expect("bulk-paid-dialog", "Hamra office");
 
 expect("stock-one-selected", "1 selected");
 expect("stock-one-selected", "Mark paid");
-expect("stock-one-selected", "→ Out for delivery");
+expect("stock-one-selected", "→ Waseet");
 expect("stock-one-selected", "Export");
 expect("stock-can-select-all", "Select all 1,605 matching");
 expect("bulk-shelve-dialog", "Shelf");

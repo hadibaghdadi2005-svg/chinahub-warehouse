@@ -11,7 +11,7 @@ const path = require("path");
 const vm = require("vm");
 
 const html = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
-const mod = html.match(/<script type="module">([\s\S]*?)<\/script>/)[1];
+const mod = fs.readFileSync(path.join(__dirname, "app.js"), "utf8");
 
 /* Pull out just the pure functions; everything else needs a browser. */
 const wanted = ["normBc", "looksLikeParcelNo", "zoneForShelf", "shelfOutOfRange"];

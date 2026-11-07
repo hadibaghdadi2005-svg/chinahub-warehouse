@@ -20,7 +20,7 @@ const { execFileSync } = require("child_process");
 const REPO = "https://github.com/hadibaghdadi2005-svg/chinahub-warehouse-app.git";
 const LIVE = "https://hadibaghdadi2005-svg.github.io/chinahub-warehouse-app/";
 const FILES = [
-  "index.html", "sw.js", "manifest.webmanifest", "icon-180.png",
+  "index.html", "app.js", "styles.css", "sw.js", "manifest.webmanifest", "icon-180.png",
   "logo.png", "logo-mark.png", "icon-192.png", "icon-512.png", "icon-maskable-512.png",
 ];
 const why = process.argv[2] || "Update the app";
@@ -47,7 +47,7 @@ try {
     if (before === after) throw new Error("could not stamp the build into " + f);
     fs.writeFileSync(p, after);
   };
-  bump("index.html", 'const BUILD = "dev";', 'const BUILD = "' + stamp + '";');
+  bump("app.js", 'const BUILD = "dev";', 'const BUILD = "' + stamp + '";');
   bump("sw.js", '"chinahub-dev"', '"chinahub-' + stamp + '"');
 
   /* Stage first, then ask. On Windows a copied file can look modified to

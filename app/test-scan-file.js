@@ -17,7 +17,7 @@ const target = process.argv[2];
 if (!target) { console.error("usage: node app/test-scan-file.js <file>"); process.exit(1); }
 
 const html = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
-let mod = html.match(/<script type="module">([\s\S]*?)<\/script>/)[1];
+let mod = fs.readFileSync(path.join(__dirname, "app.js"), "utf8");
 mod = mod.replace(/^\s*import\s[\s\S]*?;\s*$/m, "");
 
 function node(tag) {

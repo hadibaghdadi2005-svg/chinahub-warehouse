@@ -13,6 +13,8 @@ const VERSION = "chinahub-dev";
 const SHELL = [
   "./",
   "./index.html",
+  "./app.js",
+  "./styles.css",
   "./manifest.webmanifest",
   "./logo.png",
   "./logo-mark.png",
@@ -53,6 +55,22 @@ self.addEventListener("fetch", e => {
   if (!sameOrigin) {
     if (req.url === VENDOR)
       e.respondWith(caches.match(req).then(hit => hit || fetch(req)));
+    return;
+  }
+
+  /* The app's code and styles come fresh from the network every time, so a
+     new page never runs with yesterday's code; the stored copy is only for
+     when there is no connection. */
+  if (/\/(app\.js|styles\.css)$/.test(url.pathname)) {
+    e.respondWith((async () => {
+      try {
+        const fresh = await fetch(req, { cache: "reload" });
+        if (fresh && fresh.ok) (await caches.open(VERSION)).put(req, fresh.clone());
+        return fresh;
+      } catch (_) {
+        return (await caches.match(req)) || new Response("", { status: 504 });
+      }
+    })());
     return;
   }
 
