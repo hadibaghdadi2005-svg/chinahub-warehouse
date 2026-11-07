@@ -569,6 +569,10 @@ main.enter .zbar i{animation:grow 1s .25s cubic-bezier(.2,.8,.2,1) both;transfor
 .modal h3{font-size:18px;margin-bottom:4px}
 .spin{display:inline-block;width:15px;height:15px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:sp .6s linear infinite}
 @keyframes sp{to{transform:rotate(360deg)}}
+.acct{display:flex;flex-direction:column;gap:8px}
+.acct-row{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.acct-row b{overflow-wrap:anywhere;text-align:right}
+
 /* ---------- phones ----------
    iPhone Safari zooms into any field under 16px when it is tapped, and the
    page then stays zoomed. Every typing field is 16px on a phone. */
@@ -842,7 +846,7 @@ function toast(msg, kind) {
    rest, so the cases worth explaining get explained. */
 function authMessage(err) {
   const m = String(err && err.message || err || "");
-  if (/invalid login credentials/i.test(m)) return "That email and password do not match.";
+  if (/wrong username|invalid login credentials/i.test(m)) return "Wrong username or password.";
   if (/email not confirmed/i.test(m)) return "That account has not been confirmed yet.";
   if (/failed to fetch|networkerror/i.test(m)) return "No connection. Check the network and try again.";
   if (/rate limit|too many/i.test(m)) return "Too many tries. Wait a minute and try again.";
@@ -878,6 +882,81 @@ function logoMark(hop) {
   return m;
 }
 
+/* --------------------------------------------------------------- account --- */
+/* Everyone's own corner: who they are signed in as, a new password, sign out. */
+function openAccount() {
+  const scrim = el("div", "scrim");
+  const m = el("div", "modal");
+  m.append(el("h3", null, "Your account"));
+  const me = (S.staff || []).find(p => p.id === S.me.id) || {};
+  const card = el("div", "card pad acct");
+  const line = (k, v) => { const r = el("div", "acct-row"); r.append(el("span", "li-s", k), el("b", "mono", v || "—")); card.append(r); };
+  line("Name", S.me.name);
+  line("Username", S.me.username || me.username);
+  line("Email", S.session && S.session.user && S.session.user.email);
+  line("Role", (ROLES[S.me.role] || {}).label || S.me.role);
+  m.append(card);
+
+  const f = el("form");
+  f.style.marginTop = "16px";
+  f.append(el("div", "sect-t", "Change your password"));
+  const err = el("div");
+  err.style.marginTop = "10px";
+  f.append(err);
+  const field = (label, ac) => {
+    const l = el("label", "field");
+    l.append(el("span", null, label));
+    const i = el("input", "inp");
+    i.type = "password"; i.required = true; i.autocomplete = ac;
+    l.append(i); f.append(l);
+    return i;
+  };
+
+  const cur = field("Current password", "current-password");
+  const nw = field("New password (8 or more characters)", "new-password");
+  const again = field("New password again", "new-password");
+  const go = el("button", "btn pri wide", "Save new password");
+  go.type = "submit";
+  f.append(go);
+  f.addEventListener("submit", async ev => {
+    ev.preventDefault();
+    err.textContent = "";
+    if (nw.value.length < 8) { err.replaceChildren(banner("bad", "Too short", "Use at least 8 characters.")); return; }
+    if (nw.value !== again.value) { err.replaceChildren(banner("bad", "They do not match", "Type the new password the same way twice.")); return; }
+    if (nw.value === cur.value) { err.replaceChildren(banner("bad", "That is the same password", "Pick a new one.")); return; }
+    go.disabled = true; go.textContent = "Saving…";
+    /* Prove the current password first, so a phone left signed in on a shelf
+       cannot have its password changed by whoever picks it up. */
+    const email = S.session && S.session.user && S.session.user.email;
+    const check = await S.sb.auth.signInWithPassword({ email, password: cur.value });
+    if (check.error) {
+      go.disabled = false; go.textContent = "Save new password";
+      err.replaceChildren(banner("bad", "Current password is wrong", "Type the password you signed in with."));
+      return;
+    }
+    const { error } = await S.sb.auth.updateUser({ password: nw.value });
+    go.disabled = false; go.textContent = "Save new password";
+    if (error) { err.replaceChildren(banner("bad", "Could not change it", error.message)); return; }
+    scrim.remove();
+    toast("Password changed. Use the new one next time you sign in.", "ok");
+  });
+  m.append(f);
+
+  const acts = el("div", "row");
+  acts.style.marginTop = "14px";
+  const out = el("button", "btn dng", "Sign out");
+  out.onclick = () => { scrim.remove(); signOut(); };
+  const close = el("button", "btn", "Close");
+  close.style.marginLeft = "auto";
+  close.onclick = () => scrim.remove();
+  acts.append(out, close);
+  m.append(acts);
+
+  scrim.append(m);
+  scrim.addEventListener("click", e => { if (e.target === scrim) scrim.remove(); });
+  document.body.append(scrim);
+}
+
 /* --------------------------------------------------------------- sign in --- */
 function vSignIn() {
   const wrap = el("div", "auth");
@@ -895,10 +974,11 @@ function vSignIn() {
   card.append(err);
 
   const f1 = el("label", "field");
-  f1.append(el("span", null, "Email"));
+  f1.append(el("span", null, "Username or email"));
   const email = el("input", "inp");
-  email.type = "email"; email.required = true; email.autocomplete = "username";
-  email.placeholder = "you@example.com";
+  email.type = "text"; email.required = true; email.autocomplete = "username";
+  email.autocapitalize = "off"; email.spellcheck = false;
+  email.placeholder = "e.g. omar";
   f1.append(email);
 
   const f2 = el("label", "field");
@@ -921,9 +1001,7 @@ function vSignIn() {
     go.disabled = true;
     go.textContent = "";
     go.append(el("span", "spin"), document.createTextNode(" Signing in"));
-    const { error } = await S.sb.auth.signInWithPassword({
-      email: email.value.trim(), password: pass.value,
-    });
+    const { error } = await signInWith(email.value.trim(), pass.value);
     if (error) {
       err.replaceChildren(banner("bad", "Could not sign in", authMessage(error)));
       go.disabled = false;
@@ -937,6 +1015,24 @@ function vSignIn() {
 
   wrap.append(card);
   return wrap;
+}
+
+/* A username is turned into a session by the login function, so the sign-in
+   page never learns anyone's email address. An email still works as before. */
+async function signInWith(login, password) {
+  if (login.includes("@")) return S.sb.auth.signInWithPassword({ email: login, password });
+  try {
+    const r = await fetch(SUPABASE_URL + "/functions/v1/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", apikey: SUPABASE_KEY, Authorization: "Bearer " + SUPABASE_KEY },
+      body: JSON.stringify({ username: login, password }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.access_token) return { error: { message: j.error || "Wrong username or password." } };
+    return S.sb.auth.setSession({ access_token: j.access_token, refresh_token: j.refresh_token });
+  } catch (e) {
+    return { error: { message: "No connection — check the internet and try again." } };
+  }
 }
 
 /* An account that exists but has no role yet, or has been switched off. Both
@@ -984,9 +1080,9 @@ function shell(view) {
 
   const who = el("div", "who");
   who.append(roleChip(S.me.role));
-  const out = el("button", "btn sm", "Sign out");
-  out.onclick = signOut;
-  who.append(out);
+  const acc = el("button", "btn sm", "Account");
+  acc.onclick = openAccount;
+  who.append(acc);
 
   inr.append(brand, who);
   top.append(inr);
@@ -6612,6 +6708,9 @@ function vStaff() {
   ], S.staff || []));
   v.append(head);
 
+  v.append(banner(null, "Passwords cannot be read — by anyone",
+    "Only a scrambled copy is kept, so nobody (you included) can look one up. Use Reset password to give someone a new one; " +
+    "it is shown to you once. Everyone can change their own under Account."));
   v.append(banner(null, "Roles are enforced by the database, not the screen",
     "A scanner who got past this app still cannot read a charge or write one: the records " +
     "view hands them nulls where the money is, and a trigger refuses the write."));
@@ -6639,10 +6738,23 @@ function staffRow(p) {
   if (!p.active) nm.append(el("span", "chip off", "Turned off"));
   if (p.id === S.me.id) nm.append(el("span", "me", "— you"));
   m.append(nm);
+  const au = (S.staffAuth || {})[p.id] || {};
+  const who = el("div", "li-s");
+  who.append(el("span", "loc mono", "@" + (p.username || "no username")));
+  who.append(document.createTextNode("  " + (au.email || "") +
+    "  ·  " + (au.last_sign_in_at ? "last signed in " + fmtDate(au.last_sign_in_at) : (S.staffAuth ? "never signed in" : ""))));
+  m.append(who);
   m.append(el("div", "li-s", (ROLES[p.role] || {}).blurb + "  ·  added " + fmtDate(p.created_at)));
   li.append(m);
 
   const a = el("div", "li-a");
+  const pw = el("button", "btn sm", "Reset password");
+  pw.onclick = () => askResetPassword(p);
+  const un = el("button", "btn sm", "Username");
+  un.onclick = () => askStaffField(p, "username");
+  const em = el("button", "btn sm", "Email");
+  em.onclick = () => askStaffField(p, "email");
+  a.append(pw, un, em);
   if (p.id === S.me.id) {
     /* The database only stops the *last* admin stepping down. Stopping it here
        as well is this app's own choice: losing your own way back in is not
@@ -6694,11 +6806,20 @@ async function loadZones() {
 
 async function loadStaff() {
   const { data, error } = await S.sb.from("profiles")
-    .select("id,name,role,active,created_at")
+    .select("id,name,role,active,created_at,username")
     .order("role").order("name");
   if (error) { toast(error.message, "bad"); return; }
   S.staff = data || [];
   render();
+  /* Emails and last sign-in live with the sign-ins, which only the staff
+     function may read. */
+  if (isAdmin()) {
+    const r = await callFn("staff", { action: "list" });
+    if (r.ok) {
+      S.staffAuth = Object.fromEntries((r.data.users || []).map(u => [u.id, u]));
+      render();
+    }
+  }
 }
 
 async function setRole(p, role) {
@@ -6741,6 +6862,17 @@ function askAddStaff() {
   email.autocomplete = "off";
   f2.append(email);
 
+  const f4 = el("label", "field");
+  f4.append(el("span", null, "Username (what they type to sign in)"));
+  const uname = el("input", "inp mono");
+  uname.placeholder = "ali"; uname.autocomplete = "off"; uname.autocapitalize = "off"; uname.spellcheck = false;
+  uname.pattern = "[a-z0-9._-]{3,32}";
+  name.addEventListener("input", () => {
+    if (!uname.dataset.touched) uname.value = name.value.trim().split(/\s+/)[0].toLowerCase().replace(/[^a-z0-9._-]/g, "");
+  });
+  uname.addEventListener("input", () => { uname.dataset.touched = "1"; });
+  f4.append(uname);
+
   const f3 = el("label", "field");
   f3.append(el("span", null, "Role"));
   const role = el("select", "inp");
@@ -6760,7 +6892,7 @@ function askAddStaff() {
   no.onclick = () => scrim.remove();
   acts.append(go, no);
 
-  m.append(f1, f2, f3, acts);
+  m.append(f1, f4, f2, f3, acts);
 
   m.addEventListener("submit", async ev => {
     ev.preventDefault();
@@ -6771,6 +6903,7 @@ function askAddStaff() {
     const res = await callFn("staff", {
       action: "create",
       name: name.value.trim(), email: email.value.trim(), role: role.value,
+      username: uname.value.trim().toLowerCase(),
     });
     if (!res.ok) {
       err.replaceChildren(banner("bad", "Could not create the account", res.error));
@@ -6794,16 +6927,16 @@ function askAddStaff() {
 function showFirstPassword(d) {
   const scrim = el("div", "scrim");
   const m = el("div", "modal");
-  m.append(el("h3", null, d.name + " can now sign in"));
+  m.append(el("h3", null, d.title || (d.name + " can now sign in")));
   m.append(banner("ok", "Give them these, once",
-    "They should change the password after their first sign-in. This is the only time it is shown."));
+    "They can change the password themselves under Account. This is the only time it is shown."));
   const box = el("div", "card pad");
   const e = el("div");
-  e.append(el("div", "li-s", "Email"));
-  e.append(el("div", "mono", d.email));
+  e.append(el("div", "li-s", d.username ? "Username" : "Email"));
+  e.append(el("div", "mono", d.username || d.email));
   const p = el("div");
   p.style.marginTop = "10px";
-  p.append(el("div", "li-s", "First password"));
+  p.append(el("div", "li-s", d.title ? "New password" : "First password"));
   const pw = el("div", "mono", d.password);
   pw.style.fontSize = "17px";
   pw.style.fontWeight = "600";
@@ -6816,7 +6949,7 @@ function showFirstPassword(d) {
   const copy = el("button", "btn", "Copy both");
   copy.onclick = async () => {
     try {
-      await navigator.clipboard.writeText(d.email + "\n" + d.password);
+      await navigator.clipboard.writeText((d.username || d.email) + "\n" + d.password);
       toast("Copied", "ok");
     } catch (_) { toast("Could not copy — write them down", "bad"); }
   };
@@ -6826,6 +6959,96 @@ function showFirstPassword(d) {
   m.append(acts);
   scrim.append(m);
   document.body.append(scrim);
+}
+
+/* An admin cannot read anyone's password — only a hash is kept — but can set
+   a new one: made up here, or typed in. It is shown once. */
+function askResetPassword(p) {
+  const scrim = el("div", "scrim");
+  const m = el("form", "modal");
+  m.append(el("h3", null, "New password for " + p.name));
+  const sub = el("p", "sub", "Their old password stops working straight away. Leave the box empty and the app makes a strong one.");
+  sub.style.margin = "4px 0 14px";
+  m.append(sub);
+  const err = el("div");
+  m.append(err);
+  const l = el("label", "field");
+  l.append(el("span", null, "New password (optional, 8 or more characters)"));
+  const i = el("input", "inp mono");
+  i.type = "text"; i.autocomplete = "off"; i.autocapitalize = "off"; i.spellcheck = false;
+  l.append(i);
+  m.append(l);
+  const acts = el("div", "row");
+  const go = el("button", "btn pri", "Set new password");
+  go.type = "submit";
+  const no = el("button", "btn", "Cancel");
+  no.type = "button"; no.onclick = () => scrim.remove();
+  acts.append(go, no);
+  m.append(acts);
+  m.addEventListener("submit", async ev => {
+    ev.preventDefault();
+    if (i.value && i.value.length < 8) { err.replaceChildren(banner("bad", "Too short", "Use at least 8 characters, or leave it empty.")); return; }
+    go.disabled = true; go.textContent = "Setting…";
+    const r = await callFn("staff", { action: "reset_password", id: p.id, password: i.value });
+    if (!r.ok) {
+      go.disabled = false; go.textContent = "Set new password";
+      err.replaceChildren(banner("bad", "Could not set it", r.error));
+      return;
+    }
+    scrim.remove();
+    showFirstPassword({ title: "New password for " + p.name, name: p.name, username: p.username,
+      email: ((S.staffAuth || {})[p.id] || {}).email, password: r.data.password });
+  });
+  scrim.append(m);
+  scrim.addEventListener("click", e => { if (e.target === scrim) scrim.remove(); });
+  document.body.append(scrim);
+  i.focus();
+}
+
+/* Change someone's username or email. */
+function askStaffField(p, which) {
+  const isUser = which === "username";
+  const scrim = el("div", "scrim");
+  const m = el("form", "modal");
+  m.append(el("h3", null, (isUser ? "Username for " : "Email for ") + p.name));
+  const sub = el("p", "sub", isUser
+    ? "What they type to sign in. Small letters, numbers, dot, dash or underscore."
+    : "They can sign in with this as well as their username.");
+  sub.style.margin = "4px 0 14px";
+  m.append(sub);
+  const err = el("div");
+  m.append(err);
+  const i = el("input", "inp mono");
+  i.type = isUser ? "text" : "email"; i.required = true;
+  i.autocomplete = "off"; i.autocapitalize = "off"; i.spellcheck = false;
+  i.value = isUser ? (p.username || "") : (((S.staffAuth || {})[p.id] || {}).email || "");
+  m.append(i);
+  const acts = el("div", "row");
+  acts.style.marginTop = "14px";
+  const go = el("button", "btn pri", "Save");
+  go.type = "submit";
+  const no = el("button", "btn", "Cancel");
+  no.type = "button"; no.onclick = () => scrim.remove();
+  acts.append(go, no);
+  m.append(acts);
+  m.addEventListener("submit", async ev => {
+    ev.preventDefault();
+    go.disabled = true;
+    const v = i.value.trim().toLowerCase();
+    const r = await callFn("staff", isUser
+      ? { action: "set_username", id: p.id, username: v }
+      : { action: "set_email", id: p.id, email: v });
+    go.disabled = false;
+    if (!r.ok) { err.replaceChildren(banner("bad", "Could not save it", r.error)); return; }
+    scrim.remove();
+    toast(p.name + "'s " + (isUser ? "username" : "email") + " is now " + v, "ok");
+    if (p.id === S.me.id && isUser) S.me.username = v;
+    loadStaff();
+  });
+  scrim.append(m);
+  scrim.addEventListener("click", e => { if (e.target === scrim) scrim.remove(); });
+  document.body.append(scrim);
+  i.focus();
 }
 
 /* Edge functions want the caller's own token, so an admin check can happen
@@ -6986,7 +7209,7 @@ async function loadMe() {
   const uid = S.session?.user?.id;
   if (!uid) { S.me = null; return; }
   const { data, error } = await S.sb.from("profiles")
-    .select("id,name,role,active").eq("id", uid).maybeSingle();
+    .select("id,name,role,active,username").eq("id", uid).maybeSingle();
   if (error) { S.me = null; return; }
   S.me = (data && data.active) ? data : null;
 }
