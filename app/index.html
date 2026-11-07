@@ -5,62 +5,72 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>BAGHDEDI Warehouse System</title>
 <meta name="description" content="Sign-in and staff control for the BAGHDEDI consolidation warehouse.">
-<meta name="theme-color" content="#0b5c5e">
+<meta name="theme-color" content="#1f2d6e">
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="icon" href="icon-192.png" type="image/png">
 <link rel="apple-touch-icon" href="icon-192.png">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js"></script>
 <style>
-/* The tokens are the warehouse app's own, so the two look like one product. */
+/* ChinaHub colours, taken from the logo: navy for everything you act on,
+   red kept for the brand stripe and moments of motion. */
 :root{
-  --bg:#f3f6f5; --surface:#ffffff; --surface-2:#e9eeed; --surface-3:#dde4e3;
-  --line:#ccd6d4; --line-strong:#aebab8;
-  --fg:#141e1d; --fg-dim:#566766; --fg-faint:#7d8d8b;
-  --primary:#0b5c5e; --primary-hi:#0a4a4c; --primary-fg:#ffffff; --primary-wash:#dfeceb;
-  --st-expected:#6b7a79; --st-received:#9a5b06; --st-shelved:#0f766e;
-  --st-released:#4338ca; --st-delivered:#15803d;
-  --danger:#b4231d; --danger-wash:#fae6e4; --warn:#9a5b06; --ok:#15803d;
-  --shadow:0 1px 2px rgba(10,30,28,.07), 0 8px 24px -12px rgba(10,30,28,.18);
-  --shadow-lg:0 10px 48px -12px rgba(10,30,28,.34);
-  --r:10px; --r-sm:7px; --r-lg:16px;
-  --display:"Archivo","Segoe UI",system-ui,sans-serif;
+  --bg:#f3f4f9; --surface:#ffffff; --surface-2:#eef0f7; --surface-3:#e1e5f0;
+  --line:#dfe3ee; --line-strong:#c4cadb;
+  --fg:#121735; --fg-dim:#535a78; --fg-faint:#858ba5;
+  --primary:#1f2d6e; --primary-hi:#162258; --primary-fg:#ffffff; --primary-wash:#e6e9f7;
+  --accent:#d6342b; --accent-wash:#fbe8e6;
+  --st-expected:#6b7290; --st-received:#b0650a; --st-shelved:#0f766e;
+  --st-released:#7c3aed; --st-delivered:#15803d;
+  --danger:#b4231d; --danger-wash:#fae6e4; --warn:#b0650a; --ok:#15803d;
+  --shadow:0 1px 2px rgba(18,23,53,.06), 0 6px 20px -10px rgba(18,23,53,.16);
+  --shadow-lg:0 18px 50px -16px rgba(18,23,53,.32);
+  --glow:radial-gradient(900px 420px at 8% -10%, rgba(31,45,110,.10), transparent 60%),
+         radial-gradient(700px 380px at 100% -5%, rgba(214,52,43,.07), transparent 60%);
+  --r:14px; --r-sm:10px; --r-lg:20px;
+  --display:"Plus Jakarta Sans","Segoe UI",system-ui,sans-serif;
   --mono:"IBM Plex Mono",ui-monospace,"Cascadia Mono",Consolas,monospace;
 }
 @media (prefers-color-scheme:dark){ :root:not([data-theme="light"]){
-  --bg:#0d1413; --surface:#151e1d; --surface-2:#1d2726; --surface-3:#273332;
-  --line:#2b3837; --line-strong:#3e4e4c;
-  --fg:#e4edec; --fg-dim:#94a4a2; --fg-faint:#748482;
-  --primary:#2fa39b; --primary-hi:#47b8af; --primary-fg:#04201f; --primary-wash:#16302f;
-  --st-expected:#8b9b99; --st-received:#d08a2a; --st-shelved:#2fa39b;
-  --st-released:#8b87f0; --st-delivered:#49ab62;
-  --danger:#e8655c; --danger-wash:#2e1a19; --warn:#d08a2a; --ok:#49ab62;
+  --bg:#0b0e1c; --surface:#131831; --surface-2:#1a2040; --surface-3:#242b52;
+  --line:#252c50; --line-strong:#38416f;
+  --fg:#e8eaf6; --fg-dim:#a0a6c6; --fg-faint:#767c9e;
+  --primary:#8c9cff; --primary-hi:#a7b3ff; --primary-fg:#0b0e1c; --primary-wash:#1f2652;
+  --accent:#ff6b5f; --accent-wash:#3a1a1e;
+  --st-expected:#9097b5; --st-received:#e39d42; --st-shelved:#3cb8ad;
+  --st-released:#b18cff; --st-delivered:#52c070;
+  --danger:#f2685e; --danger-wash:#371a1d; --warn:#e39d42; --ok:#52c070;
   --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
-  --shadow-lg:0 10px 48px -12px rgba(0,0,0,.75);
+  --shadow-lg:0 18px 50px -16px rgba(0,0,0,.8);
+  --glow:radial-gradient(900px 420px at 8% -10%, rgba(140,156,255,.13), transparent 60%),
+         radial-gradient(700px 380px at 100% -5%, rgba(255,107,95,.08), transparent 60%);
   color-scheme:dark;
 }}
 :root[data-theme="dark"]{
-  --bg:#0d1413; --surface:#151e1d; --surface-2:#1d2726; --surface-3:#273332;
-  --line:#2b3837; --line-strong:#3e4e4c;
-  --fg:#e4edec; --fg-dim:#94a4a2; --fg-faint:#748482;
-  --primary:#2fa39b; --primary-hi:#47b8af; --primary-fg:#04201f; --primary-wash:#16302f;
-  --st-expected:#8b9b99; --st-received:#d08a2a; --st-shelved:#2fa39b;
-  --st-released:#8b87f0; --st-delivered:#49ab62;
-  --danger:#e8655c; --danger-wash:#2e1a19; --warn:#d08a2a; --ok:#49ab62;
+  --bg:#0b0e1c; --surface:#131831; --surface-2:#1a2040; --surface-3:#242b52;
+  --line:#252c50; --line-strong:#38416f;
+  --fg:#e8eaf6; --fg-dim:#a0a6c6; --fg-faint:#767c9e;
+  --primary:#8c9cff; --primary-hi:#a7b3ff; --primary-fg:#0b0e1c; --primary-wash:#1f2652;
+  --accent:#ff6b5f; --accent-wash:#3a1a1e;
+  --st-expected:#9097b5; --st-received:#e39d42; --st-shelved:#3cb8ad;
+  --st-released:#b18cff; --st-delivered:#52c070;
+  --danger:#f2685e; --danger-wash:#371a1d; --warn:#e39d42; --ok:#52c070;
   --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
-  --shadow-lg:0 10px 48px -12px rgba(0,0,0,.75);
+  --shadow-lg:0 18px 50px -16px rgba(0,0,0,.8);
+  --glow:radial-gradient(900px 420px at 8% -10%, rgba(140,156,255,.13), transparent 60%),
+         radial-gradient(700px 380px at 100% -5%, rgba(255,107,95,.08), transparent 60%);
   color-scheme:dark;
 }
 
 *{box-sizing:border-box}
 html,body{margin:0}
 body{
-  background:var(--bg); color:var(--fg);
+  background:var(--glow),var(--bg); background-attachment:fixed; color:var(--fg);
   font-family:var(--display); font-size:15px; line-height:1.45;
   -webkit-font-smoothing:antialiased;
   min-height:100dvh;
 }
-h1,h2,h3{margin:0;text-wrap:balance;letter-spacing:-.015em;font-weight:600}
+h1,h2,h3{margin:0;text-wrap:balance;letter-spacing:-.02em;font-weight:700}
 button,input,select,textarea{font:inherit;color:inherit}
 button{cursor:pointer}
 :focus-visible{outline:2.5px solid var(--primary);outline-offset:2px;border-radius:4px}
@@ -132,41 +142,81 @@ button{cursor:pointer}
 }
 
 /* ---------- sign in ---------- */
-.auth{min-height:100dvh;display:grid;place-items:center;padding:24px 0}
+.auth{min-height:100dvh;display:grid;place-items:center;padding:24px 0;position:relative;overflow:hidden}
+.auth::before,.auth::after{
+  content:"";position:fixed;width:520px;height:520px;border-radius:50%;filter:blur(80px);
+  opacity:.35;pointer-events:none;z-index:0;animation:drift 18s ease-in-out infinite alternate;
+}
+.auth::before{background:var(--primary);top:-180px;left:-160px}
+.auth::after{background:var(--accent);bottom:-220px;right:-180px;animation-delay:-9s;opacity:.22}
+@keyframes drift{to{transform:translate(90px,60px) scale(1.15)}}
 .auth-card{
+  position:relative;z-index:1;
   width:min(420px,100%); background:var(--surface); border:1px solid var(--line);
-  border-radius:var(--r-lg); box-shadow:var(--shadow-lg); padding:28px 24px 24px;
+  border-radius:var(--r-lg); box-shadow:var(--shadow-lg); padding:26px 26px 22px;
+  animation:popin .6s cubic-bezier(.2,.9,.3,1.1) both;
 }
-.logo{display:flex;align-items:center;gap:11px;margin-bottom:20px}
+.logo{display:flex;flex-direction:column;align-items:center;text-align:center;gap:6px;margin-bottom:18px}
+.logo-full{
+  width:min(230px,70%);height:auto;border-radius:16px;background:#fff;padding:6px 10px;
+  animation:logofloat 5s ease-in-out infinite;
+}
+@keyframes logofloat{50%{transform:translateY(-5px)}}
 .logo-m{
-  width:38px;height:38px;border-radius:9px;background:var(--primary);color:var(--primary-fg);
-  display:grid;place-items:center;font-weight:700;font-size:17px;flex:none;
+  width:42px;height:42px;border-radius:12px;background:#fff;flex:none;
+  display:grid;place-items:center;overflow:hidden;
+  box-shadow:0 0 0 1px var(--line),0 4px 12px -6px rgba(18,23,53,.35);
 }
-.logo-t{font-weight:700;font-size:16px;letter-spacing:-.02em;line-height:1.2}
+.logo-m img{width:100%;height:100%;object-fit:contain;display:block}
+.logo-m.hop img{animation:hop .7s cubic-bezier(.3,1.5,.5,1)}
+@keyframes hop{0%{transform:translateY(0) rotate(0)}35%{transform:translateY(-5px) rotate(-8deg)}70%{transform:translateY(1px) rotate(3deg)}100%{transform:none}}
+.logo-t{font-weight:800;font-size:16px;letter-spacing:-.02em;line-height:1.2}
 .logo-s{font-size:12.5px;color:var(--fg-dim);line-height:1.3}
 
 /* ---------- shell ---------- */
 .top{
-  position:sticky;top:0;z-index:50;background:var(--surface);
+  position:sticky;top:0;z-index:50;
+  background:color-mix(in srgb,var(--surface) 82%,transparent);
+  -webkit-backdrop-filter:saturate(1.4) blur(14px);backdrop-filter:saturate(1.4) blur(14px);
   border-bottom:1px solid var(--line);
   padding-top:env(safe-area-inset-top,0px);
 }
-.top-in{display:flex;align-items:center;gap:12px;padding-block:9px;max-width:1280px;margin:0 auto}
-.brand{display:flex;align-items:center;gap:10px;min-width:0;margin-right:auto}
+/* The brand stripe: the logo's red-to-navy underline, run across the top. */
+.top::after{
+  content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;
+  background:linear-gradient(90deg,var(--accent),var(--primary) 55%,transparent);
+  opacity:.85;
+}
+.top-in{display:flex;align-items:center;gap:12px;padding-block:10px 8px;max-width:1280px;margin:0 auto}
+.brand{display:flex;align-items:center;gap:11px;min-width:0;margin-right:auto}
 .brand-tx{min-width:0}
+.brand-tx .logo-t{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .who{display:flex;align-items:center;gap:9px;min-width:0}
 .who-nm{font-weight:600;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:22ch}
-.tabs{display:flex;gap:4px;overflow-x:auto;scrollbar-width:none;max-width:1280px;margin:0 auto;padding-bottom:7px}
+.tabs{position:relative;display:flex;gap:2px;overflow-x:auto;scrollbar-width:none;max-width:1280px;margin:0 auto;padding-bottom:9px}
 .tabs::-webkit-scrollbar{display:none}
 .tab{
+  position:relative;z-index:1;
   border:1px solid transparent;background:none;color:var(--fg-dim);
-  padding:6px 13px;border-radius:999px;font-size:13.5px;font-weight:600;white-space:nowrap;
+  padding:7px 14px;border-radius:999px;font-size:13.5px;font-weight:600;white-space:nowrap;
 }
-.tab:hover{background:var(--surface-2);color:var(--fg)}
+.tab:hover{color:var(--fg);background:var(--surface-2)}
 .tab[aria-current="page"]{background:var(--primary);border-color:var(--primary);color:var(--primary-fg)}
-main{max-width:1280px;margin:0 auto;padding:18px 0 72px}
-.vhead{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:14px}
-.vhead h2{font-size:21px}
+/* With the sliding pill in place, it carries the colour instead. */
+.tabs.slide .tab[aria-current="page"]{background:transparent;border-color:transparent}
+.tab-ind{
+  position:absolute;z-index:0;border-radius:999px;background:var(--primary);
+  box-shadow:0 6px 16px -6px color-mix(in srgb,var(--primary) 70%,transparent);
+  transition:left .42s cubic-bezier(.3,1.3,.5,1),width .42s cubic-bezier(.3,1.3,.5,1);
+  pointer-events:none;
+}
+.tab-ind::after{
+  content:"";position:absolute;left:50%;bottom:-6px;width:5px;height:5px;margin-left:-2.5px;
+  border-radius:50%;background:var(--accent);
+}
+main{max-width:1280px;margin:0 auto;padding:22px 0 72px}
+.vhead{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+.vhead h2{font-size:24px;font-weight:800;letter-spacing:-.03em}
 .sub{color:var(--fg-dim);font-size:13.5px}
 
 /* ---------- bits ---------- */
@@ -176,10 +226,11 @@ main{max-width:1280px;margin:0 auto;padding:18px 0 72px}
   padding:9px 15px;border-radius:var(--r-sm);font-weight:600;font-size:14px;
   min-height:42px;
 }
-.btn:hover{background:var(--surface-2)}
+.btn:hover{background:var(--surface-2);border-color:var(--line-strong)}
 .btn[disabled]{opacity:.5;cursor:not-allowed}
-.btn.pri{background:var(--primary);border-color:var(--primary);color:var(--primary-fg)}
-.btn.pri:hover{background:var(--primary-hi)}
+.btn.pri{background:var(--primary);border-color:var(--primary);color:var(--primary-fg);
+  box-shadow:0 6px 16px -8px color-mix(in srgb,var(--primary) 80%,transparent)}
+.btn.pri:hover{background:var(--primary-hi);transform:translateY(-1px)}
 .btn.dng{color:var(--danger);border-color:var(--danger)}
 .btn.dng:hover{background:var(--danger-wash)}
 .btn.sm{min-height:34px;padding:5px 11px;font-size:13px}
@@ -245,7 +296,11 @@ select.inp{appearance:none;background-image:linear-gradient(45deg,transparent 49
 .mode:hover{background:var(--surface-2)}
 .mode b{font-size:14px;font-weight:700}
 .mode span{font-size:11.5px;color:var(--fg-dim);line-height:1.25}
-.mode.on{background:var(--primary);border-color:var(--primary);color:var(--primary-fg)}
+.mode{transition:background-color .18s,border-color .18s,transform .18s cubic-bezier(.2,.8,.2,1),box-shadow .22s}
+.mode:hover{transform:translateY(-1px)}
+.mode:active{transform:scale(.97)}
+.mode.on{background:var(--primary);border-color:var(--primary);color:var(--primary-fg);
+  box-shadow:0 8px 20px -10px color-mix(in srgb,var(--primary) 85%,transparent)}
 .mode.on span{color:color-mix(in srgb,var(--primary-fg) 78%,transparent)}
 .scanbox{display:flex;gap:8px;margin-bottom:4px}
 .scanbox .inp{flex:1;font-size:19px;min-height:54px;letter-spacing:.02em}
@@ -254,14 +309,22 @@ select.inp{appearance:none;background-image:linear-gradient(45deg,transparent 49
 /* ---------- stock tiles ---------- */
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:14px}
 .tile{
-  display:flex;flex-direction:column;gap:1px;align-items:flex-start;text-align:left;
+  position:relative;overflow:hidden;
+  display:flex;flex-direction:column;gap:2px;align-items:flex-start;text-align:left;
   background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
-  padding:11px 13px;box-shadow:var(--shadow);min-height:74px;
+  padding:13px 15px;box-shadow:var(--shadow);min-height:80px;
 }
+/* A thin bar of brand colour that grows in from the left on hover. */
+.tile::before{
+  content:"";position:absolute;left:0;top:0;height:3px;width:100%;
+  background:linear-gradient(90deg,var(--primary),var(--accent));
+  transform:scaleX(0);transform-origin:left;transition:transform .35s cubic-bezier(.2,.8,.2,1);
+}
+.tile:hover::before,.tile.on::before{transform:scaleX(1)}
 .tile:hover{border-color:var(--line-strong)}
 .tile.on{border-color:var(--primary);box-shadow:0 0 0 1px var(--primary) inset,var(--shadow)}
 .tile .k{font-size:12px;font-weight:600;color:var(--fg-dim);letter-spacing:.01em}
-.tile .v{font-size:23px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.15}
+.tile .v{font-size:25px;font-weight:800;letter-spacing:-.03em;font-variant-numeric:tabular-nums;line-height:1.15}
 .tile .n{font-size:11.5px;color:var(--fg-faint);line-height:1.25}
 
 /* ---------- zones ---------- */
@@ -389,12 +452,26 @@ main.enter .zbar i{animation:grow 1s .25s cubic-bezier(.2,.8,.2,1) both;transfor
 .modal,.scrim.enter .drawer{animation:popin .32s cubic-bezier(.2,.9,.3,1.1) both}
 .toast{animation:popin .35s cubic-bezier(.2,.9,.3,1.2) both}
 
+/* Press ripple: a soft ring spreads from where the finger landed. */
+.btn,.mode,.zcard{position:relative;overflow:hidden}
+.rip{
+  position:absolute;border-radius:50%;pointer-events:none;
+  background:currentColor;opacity:.18;transform:scale(0);
+  animation:rip .6s cubic-bezier(.2,.8,.2,1) forwards;
+}
+@keyframes rip{to{transform:scale(1);opacity:0}}
+/* A scan field that is ready glows softly. */
+.scanbox .inp:focus{box-shadow:0 0 0 4px var(--primary-wash),0 10px 30px -14px color-mix(in srgb,var(--primary) 70%,transparent)}
+/* Loading values breathe instead of sitting still. */
+.tile .v.wait{animation:breathe 1.2s ease-in-out infinite}
+@keyframes breathe{50%{opacity:.35}}
+
 /* The airplane that carries you between sections. */
 .flight{position:fixed;inset:0;pointer-events:none;z-index:70;transition:opacity .35s}
 .flight.out{opacity:0}
 .flight svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
 .flight .trail{fill:none;stroke:var(--primary);stroke-width:2.5;stroke-linecap:round;stroke-dasharray:2 9;opacity:.75}
-.flight .plane{color:#c8262c;filter:drop-shadow(0 6px 8px rgba(10,30,28,.3))}
+.flight .plane{color:var(--accent);filter:drop-shadow(0 6px 8px rgba(18,23,53,.3))}
 @media print{.flight{display:none!important}}
 
 /* ---------- toasts ---------- */
@@ -648,12 +725,22 @@ function banner(kind, title, body) {
 
 function logo() {
   const w = el("div", "logo");
-  const m = el("div", "logo-m", initials(BRAND));
+  const img = el("img", "logo-full");
+  img.src = "logo.png"; img.alt = "Chinahub.Lb — Think local, ship global";
   const t = el("div");
   t.append(el("div", "logo-t", BRAND));
   t.append(el("div", "logo-s", BRAND_SUB));
-  w.append(m, t);
+  w.append(img, t);
   return w;
+}
+
+/* The ChinaHub mark in a small white tile, for the header. */
+function logoMark(hop) {
+  const m = el("div", "logo-m" + (hop ? " hop" : ""));
+  const img = el("img");
+  img.src = "logo-mark.png"; img.alt = "ChinaHub";
+  m.append(img);
+  return m;
 }
 
 /* --------------------------------------------------------------- sign in --- */
@@ -748,8 +835,13 @@ function shell(view) {
 
   const top = el("header", "top");
   const inr = el("div", "top-in gut");
+  /* Only the first render of a section animates it in. */
+  const entering = S._shownTab !== S.tab;
+  S._shownTab = S.tab;
+  if (entering) S._enterAt = Date.now();
+
   const brand = el("div", "brand");
-  brand.append(el("div", "logo-m", initials(whName())));
+  brand.append(logoMark(entering));
   const bt = el("div", "brand-tx");
   bt.append(el("div", "logo-t", whName()));
   bt.append(el("div", "logo-s", S.me.name));
@@ -763,10 +855,6 @@ function shell(view) {
 
   inr.append(brand, who);
   top.append(inr);
-
-  /* Only the first render of a section animates it in. */
-  const entering = S._shownTab !== S.tab;
-  S._shownTab = S.tab;
 
   const tabs = el("nav", "tabs gut");
   const list = visibleTabs();
@@ -6599,7 +6687,92 @@ function render() {
   app.replaceChildren(shell(view));
   const dr = vDrawer();
   if (dr) app.append(dr);
+  afterRender();
 }
+
+/* ------------------------------------------------------------ motion fx --- */
+/* The screen is rebuilt on every change, so anything that should glide from
+   where it was remembers where that was. */
+const calm = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function afterRender() {
+  slideTabPill();
+  rollNumbers();
+}
+
+/* The navy pill slides from the last section to this one. */
+function slideTabPill() {
+  const nav = document.querySelector(".tabs");
+  const cur = nav && nav.querySelector('.tab[aria-current="page"]');
+  if (!cur) return;
+  nav.classList.add("slide");
+  const ind = el("span", "tab-ind");
+  nav.prepend(ind);
+  const to = { l: cur.offsetLeft, t: cur.offsetTop, w: cur.offsetWidth, h: cur.offsetHeight };
+  const from = S._pill || to;
+  const place = p => {
+    ind.style.left = p.l + "px"; ind.style.width = p.w + "px";
+    ind.style.top = to.t + "px"; ind.style.height = to.h + "px";
+  };
+  ind.style.transition = "none";
+  place(calm() ? to : from);
+  void ind.offsetWidth;
+  ind.style.transition = "";
+  place(to);
+  S._pill = to;
+  /* On a phone the row scrolls: keep the current section in view. */
+  if (cur.offsetLeft < nav.scrollLeft || cur.offsetLeft + cur.offsetWidth > nav.scrollLeft + nav.clientWidth)
+    nav.scrollLeft = cur.offsetLeft - nav.clientWidth / 2 + cur.offsetWidth / 2;
+}
+
+/* Big numbers count up to their value when they first appear or change. */
+const NUM_RE = /^([^\d-]*)(-?[\d,]*\.?\d+)(.*)$/;
+function rollNumbers() {
+  const main = document.querySelector("main");
+  if (!main) return;
+  S._nums = S._nums || {};
+  const entering = main.classList.contains("enter");
+  main.querySelectorAll(".tile .v, .zv").forEach((v, i) => {
+    const txt = v.textContent.trim();
+    if (txt === "…") { v.classList.add("wait"); return; }
+    const m = NUM_RE.exec(txt);
+    if (!m) return;
+    const label = (v.parentElement.querySelector(".k, .zn") || {}).textContent || "";
+    const key = S.tab + "|" + i + "|" + label;
+    const target = parseFloat(m[2].replace(/,/g, ""));
+    const prev = S._nums[key];
+    S._nums[key] = target;
+    if (calm() || !isFinite(target)) return;
+    /* Counts that land within a few seconds of opening the section roll up from 0. */
+    const fresh = entering || Date.now() - (S._enterAt || 0) < 4000;
+    const start = prev != null ? prev : (fresh ? 0 : null);
+    if (start == null || start === target) return;
+    const dec = (m[2].split(".")[1] || "").length;
+    const fmt = new Intl.NumberFormat("en-US", { minimumFractionDigits: dec, maximumFractionDigits: dec });
+    const t0 = performance.now(), D = 750;
+    const step = now => {
+      if (!v.isConnected) return;
+      const p = Math.min(1, (now - t0) / D), e = 1 - Math.pow(1 - p, 3);
+      v.textContent = m[1] + fmt.format(start + (target - start) * e) + m[3];
+      if (p < 1) requestAnimationFrame(step);
+    };
+    v.textContent = m[1] + fmt.format(start) + m[3];
+    requestAnimationFrame(step);
+  });
+}
+
+/* Press ripple on buttons, scan modes and zone cards. */
+document.addEventListener("pointerdown", e => {
+  const b = e.target.closest && e.target.closest(".btn, .mode, .zcard");
+  if (!b || b.disabled || calm()) return;
+  const r = b.getBoundingClientRect();
+  const size = Math.max(r.width, r.height) * 2.2;
+  const s = document.createElement("span");
+  s.className = "rip";
+  s.style.cssText = `width:${size}px;height:${size}px;left:${e.clientX - r.left - size / 2}px;top:${e.clientY - r.top - size / 2}px`;
+  b.append(s);
+  setTimeout(() => s.remove(), 650);
+}, { passive: true });
 
 /* A signed-in account with no profile row, or an inactive one, reads back
    nothing — which is the right answer either way, and the same one. */

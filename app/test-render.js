@@ -529,7 +529,8 @@ const expect = (name, needle) => {
 expect("signIn", "Sign in");
 /* The name, in the one place that cannot read it from the database. */
 expect("signIn", "BAGHDEDI Warehouse System");
-expect("signIn", "BW");
+/* The ChinaHub logo replaced the initials badge. */
+expect("signIn", "logo-full");
 expect("noAccess", "cannot see the warehouse");
 expect("scan-lookup", "changes nothing");
 expect("scan-shelve", "onto a shelf");

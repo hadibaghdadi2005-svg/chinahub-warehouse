@@ -36,7 +36,7 @@ Accounts are made by an admin from inside the app; there is no public sign-up.
 | File | What it is |
 |---|---|
 | `app/index.html` | The app. Published to GitHub Pages by `app/publish-pages.js`, which regenerates the public repo — never edit that copy by hand. |
-| `app/sw.js`, `manifest.webmanifest`, `icon-*.png` | What makes it installable and able to open with no network. Icons are drawn by `app/make-icons.js`. |
+| `app/sw.js`, `manifest.webmanifest`, `icon-*.png` | What makes it installable and able to open with no network. Icons and `logo*.png` are cut from the ChinaHub logo. |
 | `app/serve.js` | A local server for trying the app before publishing. |
 | `app/test-render.js` | Builds every view headlessly. A view that throws reaches a PDA as a blank screen and nothing else catches it. |
 | `app/test-scan-logic.js` | The barcode and shelf-label rules, against the real zone layout. |
