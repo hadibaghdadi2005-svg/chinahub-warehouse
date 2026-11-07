@@ -584,6 +584,13 @@ main.enter .zbar i{animation:grow 1s .25s cubic-bezier(.2,.8,.2,1) both;transfor
 .dt-code{display:flex;align-items:center;gap:6px}
 .dt .dt-code b{display:inline}
 
+.bulkstrip{margin-bottom:12px;gap:8px}
+.bulkmiss{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
+.bulkmiss .row{justify-content:space-between;margin-bottom:8px}
+.bulkcodes{display:flex;flex-wrap:wrap;gap:6px;max-height:180px;overflow:auto}
+.bulkcode{display:inline-flex;align-items:center;gap:2px;padding:2px 4px 2px 9px;border-radius:8px;
+  background:var(--danger-wash);color:var(--danger);font-size:12.5px}
+
 /* ---------- phones ----------
    iPhone Safari zooms into any field under 16px when it is tapped, and the
    page then stays zoomed. Every typing field is 16px on a phone. */
@@ -2077,7 +2084,7 @@ function vStock() {
   headExport(head, exportStockList, "Export list");
   v.append(head);
 
-  v.append(stockTiles());
+  v.append(S.bulk ? bulkSummary() : stockTiles());
   v.append(stockFilters());
 
   if (S.searching) {
@@ -2113,9 +2120,188 @@ function vStock() {
   return v;
 }
 
+/* ---------------------------------------------------------- bulk search --- */
+/* Admin only: paste a column of parcel numbers and see them all at once. The
+   list below becomes exactly those parcels, so ticking, moving, paying and
+   exporting all work on them as usual. */
+const BULK_MAX = 500;
+
+function parseBulk(text) {
+  const seen = new Set(), out = [];
+  for (const raw of String(text || "").split(/[\s,;|]+/)) {
+    const c = raw.replace(/^['"=]+|['"]+$/g, "").trim();
+    if (c && !seen.has(c)) { seen.add(c); out.push(c); }
+  }
+  return out;
+}
+
+function askBulkSearch() {
+  const scrim = el("div", "scrim");
+  const m = el("form", "modal");
+  m.append(el("h3", null, "Bulk search"));
+  const sub = el("p", "sub", "Paste parcel numbers — one per line, or separated by spaces or commas. " +
+    "Up to " + BULK_MAX + " at once. Straight from Excel works.");
+  sub.style.margin = "4px 0 12px";
+  m.append(sub);
+  const err = el("div");
+  m.append(err);
+  const ta = el("textarea", "inp mono");
+  ta.rows = 10;
+  ta.style.cssText = "width:100%;resize:vertical;min-height:180px";
+  ta.placeholder = "435395393498783\n434785541232573\n…";
+  ta.spellcheck = false;
+  ta.value = S.bulk ? S.bulk.codes.join("\n") : "";
+  m.append(ta);
+  const count = el("div", "li-s");
+  count.style.margin = "6px 0 12px";
+  const recount = () => {
+    const n = parseBulk(ta.value).length;
+    count.textContent = nf0.format(n) + " parcel number" + (n === 1 ? "" : "s") + (n > BULK_MAX ? " — too many, keep it to " + BULK_MAX : "");
+  };
+  ta.addEventListener("input", recount);
+  recount();
+  m.append(count);
+  const acts = el("div", "row");
+  const go = el("button", "btn pri", "Search them");
+  go.type = "submit";
+  const no = el("button", "btn", "Cancel");
+  no.type = "button"; no.onclick = () => scrim.remove();
+  acts.append(go, no);
+  m.append(acts);
+  m.addEventListener("submit", ev => {
+    ev.preventDefault();
+    const codes = parseBulk(ta.value);
+    if (!codes.length) { err.replaceChildren(banner("bad", "Nothing to search", "Paste at least one parcel number.")); return; }
+    if (codes.length > BULK_MAX) { err.replaceChildren(banner("bad", "Too many at once", "Keep it to " + BULK_MAX + " and search the rest after.")); return; }
+    scrim.remove();
+    if (S.tab === "stock") S.q = "";
+    setBulk(codes);
+  });
+  scrim.append(m);
+  scrim.addEventListener("click", e => { if (e.target === scrim) scrim.remove(); });
+  document.body.append(scrim);
+  ta.focus();
+}
+
+/* One list of barcodes, shared by every section that lists parcels or
+   shipments, until it is cleared. Each section's data is dropped so it is
+   asked for again with the list applied. */
+function setBulk(codes) {
+  S.bulk = codes && codes.length ? { codes, found: null } : null;
+  S.sel = new Set(); S.page = 0;
+  S.rows = null; S.waseetData = null; S.waseetShips = null; S.ships = null;
+  if (S.tab === "stock") { loadStock(); if (S.bulk) loadBulkSummary(); else loadStats(); }
+  else if (S.tab === "waseet") loadWaseet();
+  else if (S.tab === "shipping") loadShipments();
+  render();
+}
+
+/* The admin's bulk-search strip for sections without the Stock filter bar. */
+function bulkStrip() {
+  if (!isAdmin()) return document.createDocumentFragment();
+  const r = el("div", "row bulkstrip");
+  const b = el("button", "btn sm", S.bulk ? "Edit bulk search" : "Bulk search");
+  b.type = "button";
+  b.onclick = askBulkSearch;
+  r.append(b);
+  if (S.bulk) {
+    r.append(el("span", "chip admin", "showing only " + nf0.format(S.bulk.codes.length) + " searched barcodes"));
+    const c = el("button", "btn sm", "Clear bulk search");
+    c.type = "button";
+    c.onclick = () => setBulk(null);
+    r.append(c);
+  }
+  return r;
+}
+
+/* Shipments answer to their code or their number (SHIP-12, 12). */
+function bulkShipFilter(q) {
+  if (!S.bulk) return q;
+  const safe = S.bulk.codes.filter(c => /^[A-Za-z0-9._-]+$/.test(c));
+  const nums = safe.map(c => (/^(?:SHIP-?)?(\d{1,9})$/i.exec(c) || [])[1]).filter(Boolean);
+  const parts = [];
+  if (safe.length) parts.push("code.in.(" + safe.join(",") + ")");
+  if (nums.length) parts.push("ship_num.in.(" + nums.join(",") + ")");
+  return parts.length ? q.or(parts.join(",")) : q.eq("ship_num", -1);
+}
+
+/* What came back, and — just as important — what did not. */
+async function loadBulkSummary() {
+  const b = S.bulk;
+  if (!b) return;
+  const found = [];
+  for (let i = 0; i < b.codes.length; i += 150) {
+    const { data, error } = await S.sb.from("parcels_view")
+      .select("barcode,status,cost,paid").in("barcode", b.codes.slice(i, i + 150));
+    if (error) { toast("Could not check the list — " + error.message, "bad"); return; }
+    found.push(...(data || []));
+  }
+  if (S.bulk !== b) return;
+  b.found = found;
+  render();
+}
+
+function bulkSummary() {
+  const b = S.bulk;
+  const card = el("div", "card pad bulksum");
+  card.style.marginBottom = "14px";
+  if (!b.found) {
+    if (!b.loading) { b.loading = true; setTimeout(loadBulkSummary, 0); }
+    card.append(el("span", "spin"), document.createTextNode(" Checking " + nf0.format(b.codes.length) + " parcel numbers…"));
+    return card;
+  }
+  const have = new Set(b.found.map(r => r.barcode));
+  const missing = b.codes.filter(c => !have.has(c));
+  const tiles = el("div", "tiles");
+  tiles.style.marginBottom = "0";
+  const t = (k, v, n, colour) => {
+    const d = el("div", "tile");
+    d.append(el("div", "k", k));
+    const val = el("div", "v", v);
+    if (colour) val.style.color = colour;
+    d.append(val);
+    if (n) d.append(el("div", "n", n));
+    return d;
+  };
+  tiles.append(t("Found", nf0.format(b.found.length), "of " + nf0.format(b.codes.length) + " searched", "var(--ok)"));
+  tiles.append(t("Not found", nf0.format(missing.length), missing.length ? "listed below" : "every one is here",
+    missing.length ? "var(--danger)" : null));
+  const by = {};
+  for (const r of b.found) by[r.status] = (by[r.status] || 0) + 1;
+  for (const st of ORDER) if (by[st]) tiles.append(t(STATUS[st] || st, nf0.format(by[st])));
+  if (sees_money()) {
+    const unpaid = b.found.filter(r => !r.paid && r.status !== "expected");
+    tiles.append(t("Unpaid", money(unpaid.reduce((a, r) => a + (Number(r.cost) || 0), 0)),
+      nf0.format(unpaid.length) + " parcel" + (unpaid.length === 1 ? "" : "s"), "var(--danger)"));
+  }
+  card.append(tiles);
+  if (missing.length) {
+    const box = el("div", "bulkmiss");
+    const hd = el("div", "row");
+    hd.append(el("span", "sect-t", "Not in the app"));
+    const cp = el("button", "btn sm", "Copy all " + nf0.format(missing.length));
+    cp.type = "button";
+    cp.onclick = async () => {
+      try { await navigator.clipboard.writeText(missing.join("\n")); toast("Copied " + missing.length + " parcel numbers", "ok"); }
+      catch (_) { toast("Could not copy", "bad"); }
+    };
+    hd.append(cp);
+    box.append(hd);
+    const wrap = el("div", "bulkcodes");
+    for (const c of missing) {
+      const it = el("span", "bulkcode");
+      it.append(el("span", "mono", c), copyBtn(c));
+      wrap.append(it);
+    }
+    box.append(wrap);
+    card.append(box);
+  }
+  return card;
+}
+
 const anyFilter = () =>
   !!(S.q.trim() || S.filters.status || S.filters.zone || S.filters.paid ||
-     S.filters.here || S.filters.client);
+     S.filters.here || S.filters.client || S.bulk);
 
 function stockTiles() {
   const wrap = el("div", "tiles");
@@ -2218,15 +2404,27 @@ function stockFilters() {
     bar.append(chip);
   }
 
+  if (S.bulk) {
+    const chip = el("span", "chip admin", nf0.format(S.bulk.codes.length) + " barcodes");
+    bar.append(chip);
+  }
+
   const go = el("button", "btn pri", "Search");
   go.type = "submit";
   bar.append(go);
+
+  if (isAdmin()) {
+    const bulk = el("button", "btn", S.bulk ? "Edit bulk search" : "Bulk search");
+    bulk.type = "button";
+    bulk.onclick = askBulkSearch;
+    bar.append(bulk);
+  }
 
   if (anyFilter()) {
     const clr = el("button", "btn", "Clear");
     clr.type = "button";
     clr.onclick = () => {
-      S.q = ""; S.filters = { status: "", zone: "", paid: "" }; S.stockSort = ""; applyFilters();
+      S.q = ""; S.filters = { status: "", zone: "", paid: "" }; S.stockSort = ""; S.bulk = null; S.sel = new Set(); applyFilters();
     };
     bar.append(clr);
   }
@@ -2330,6 +2528,8 @@ function stockQuery(cols, withCount) {
      a short client number like 65 is also a substring of hundreds of barcodes,
      so asking it as free text buries the answer. */
   if (f.client) qy = qy.eq("client_id", f.client);
+  /* A bulk search is an exact list of barcodes. */
+  if (S.bulk) qy = qy.in("barcode", S.bulk.codes);
 
   /* "Still here" is what the late and long-stay counts mean, so the list has
      to agree with the tile it came from. */
@@ -3212,7 +3412,9 @@ function salesFiltered() {
   const long = (S.stats && S.stats.long_stay_days) || 90;
   const here = r => r.status === "received" || r.status === "shelved";
   const term = S.soQ.trim().toLowerCase();
+  const bulk = S.bulk ? new Set(S.bulk.codes) : null;
   let rows = (S.soData || []).filter(r => {
+    if (bulk && !bulk.has(r.barcode)) return false;
     if (S.soStatus === "in_warehouse" ? !here(r) : S.soStatus && r.status !== S.soStatus) return false;
     if (S.soPay === "unpaid" && r.paid) return false;
     if (S.soPay === "paid" && !r.paid) return false;
@@ -3296,6 +3498,7 @@ function vSales() {
       nf0.format(rows.filter(r => r.status === "expected").length) + " still on the way"),
   );
   v.append(tiles);
+  v.append(bulkStrip());
   v.append(salesFilters());
 
   if (S.soLoading) {
@@ -4308,6 +4511,7 @@ function vShipping() {
     "Priced by the shipping department, per CBM by sea and per kilo by air."));
   head.append(h);
   v.append(head);
+  v.append(bulkStrip());
 
   const s = S.shipStats;
   const tiles = el("div", "tiles");
@@ -4602,6 +4806,7 @@ async function loadShipments() {
   let qy = S.sb.from("shipments").select(
     "ship_num,code,client,mode,container,boxes,goods,weight_kg,volume_cbm," +
     "price,total,paid_amount,raised_at,arrived_at,delivered_at,paid_at,delivery_to,zone,shelf");
+  qy = bulkShipFilter(qy);
   if (f.mode) qy = qy.eq("mode", f.mode);
   if (f.paid === "unpaid") qy = qy.is("paid_at", null);
   if (f.paid === "paid") qy = qy.not("paid_at", "is", null);
@@ -4825,6 +5030,7 @@ function vWaseet() {
     "Waseet takes parcels, delivers them, and collects the shipping cash from clients. You collect that money from Waseet."));
   head.append(h);
   v.append(head);
+  v.append(bulkStrip());
 
   /* search bar */
   const searchBar = el("form", "row");
@@ -5118,6 +5324,7 @@ async function loadWaseet() {
   let qy = S.sb.from("parcels_view")
     .select("barcode,name,client_id,customer,phone,cost,paid,status,updated_at")
     .eq("status", "released");
+  if (S.bulk) qy = qy.in("barcode", S.bulk.codes);
   if (S.waseetDate) qy = qy.eq("shipped_at", S.waseetDate);
   if (wLike) {
     qy = qy.or(["phone.ilike." + wLike, "barcode.ilike." + wLike,
@@ -5128,6 +5335,7 @@ async function loadWaseet() {
   let sq = S.sb.from("shipments")
     .select("ship_num,code,client,mode,total,paid_at,paid_amount,delivered_at,arrived_at,phone")
     .eq("delivery_to", "waseet").is("delivered_at", null);
+  sq = bulkShipFilter(sq);
   if (S.waseetDate) sq = sq.eq("arrived_at", S.waseetDate);
   if (wLike) {
     sq = sq.or(["client.ilike." + wLike, "code.ilike." + wLike,
@@ -7296,7 +7504,7 @@ async function onAuth(evt, session) {
       S.ships = null; S.shipStats = null; S.shipQ = "";
       S.shipFilters = { mode: "", paid: "" }; S.shipSel = new Set();
       S.ccData = null; S.ccOpen = new Set(); S.ccQ = "";
-      S.soData = null; S.soQ = ""; S.soStatus = ""; S.soPay = ""; S.soMonth = ""; S.soPage = 0;
+      S.bulk = null; S.soData = null; S.soQ = ""; S.soStatus = ""; S.soPay = ""; S.soMonth = ""; S.soPage = 0;
       if (S.session) await loadMe();
       if (isCallCenter()) S.tab = "stock";
       render();
