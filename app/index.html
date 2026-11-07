@@ -308,10 +308,20 @@ select.inp{appearance:none;background-image:linear-gradient(45deg,transparent 49
 .me{font-size:11px;color:var(--fg-faint);font-weight:600}
 
 /* ---------- scan station ---------- */
-.modes{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;margin-bottom:12px}
+.modes{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:14px}
 @media (max-width:620px){.modes{grid-template-columns:repeat(2,1fr)}}
+/* Each mode has its own colour, so the screen says what a scan will do
+   from across the room. */
+.m-receive{--mc:var(--st-received)}.m-shelve{--mc:var(--st-shelved)}.m-zone{--mc:var(--st-shelved)}
+.m-branch{--mc:var(--warn)}.m-release{--mc:var(--st-released)}.m-deliver{--mc:var(--st-delivered)}
+.m-lookup{--mc:var(--primary)}
+.ico{display:inline-grid;place-items:center;flex:none}
+.mode .ico{width:36px;height:36px;border-radius:10px;color:var(--mc);
+  background:color-mix(in srgb,var(--mc) 14%,transparent);transition:transform .3s cubic-bezier(.3,1.5,.5,1)}
+.mode:hover .ico{transform:rotate(-8deg) scale(1.08)}
+.mode-tx{display:flex;flex-direction:column;gap:1px;min-width:0}
 .mode{
-  display:flex;flex-direction:column;gap:1px;align-items:flex-start;text-align:left;
+  display:flex;flex-direction:row;gap:10px;align-items:center;text-align:left;
   border:1px solid var(--line-strong);background:var(--surface);border-radius:var(--r-sm);
   padding:9px 11px;min-height:54px;
 }
@@ -321,12 +331,47 @@ select.inp{appearance:none;background-image:linear-gradient(45deg,transparent 49
 .mode{transition:background-color .18s,border-color .18s,transform .18s cubic-bezier(.2,.8,.2,1),box-shadow .22s}
 .mode:hover{transform:translateY(-1px)}
 .mode:active{transform:scale(.97)}
-.mode.on{background:var(--primary);border-color:var(--primary);color:var(--primary-fg);
-  box-shadow:0 8px 20px -10px color-mix(in srgb,var(--primary) 85%,transparent)}
-.mode.on span{color:color-mix(in srgb,var(--primary-fg) 78%,transparent)}
-.scanbox{display:flex;gap:8px;margin-bottom:4px}
-.scanbox .inp{flex:1;font-size:19px;min-height:54px;letter-spacing:.02em}
-.scanbox .btn{min-height:54px;padding-inline:20px}
+.mode.on{background:var(--mc);border-color:var(--mc);color:#fff;
+  box-shadow:0 8px 20px -10px color-mix(in srgb,var(--mc) 85%,transparent)}
+.mode.on span{color:rgba(255,255,255,.82)}
+.mode.on .ico{background:rgba(255,255,255,.2);color:#fff;animation:tabpop .5s cubic-bezier(.3,1.6,.5,1)}
+.m-lookup.on,.m-lookup.on .ico{color:var(--primary-fg)}
+.mode.m-lookup.on span{color:color-mix(in srgb,var(--primary-fg) 80%,transparent)}
+.scanbox{display:flex;gap:8px;margin-bottom:6px}
+.scanfield{position:relative;flex:1;min-width:0;border-radius:var(--r-sm)}
+.scanbox .inp{width:100%;font-size:19px;min-height:58px;letter-spacing:.02em;padding-left:50px;
+  border-width:1.5px;border-color:color-mix(in srgb,var(--mc) 45%,var(--line-strong))}
+.scanbox .inp:focus{border-color:var(--mc);box-shadow:0 0 0 4px color-mix(in srgb,var(--mc) 18%,transparent)}
+.scan-ico{position:absolute;left:15px;top:50%;transform:translateY(-50%);color:var(--mc);pointer-events:none;z-index:1}
+.scanbox .btn{min-height:58px;padding-inline:22px}
+/* The laser: a red line sweeps the field while it waits for the gun. */
+.laser{position:absolute;left:12px;right:12px;bottom:8px;height:2px;pointer-events:none;opacity:0;z-index:1;
+  background:linear-gradient(90deg,transparent,var(--accent) 45%,var(--accent) 55%,transparent);
+  background-size:40% 100%;background-repeat:no-repeat;transition:opacity .2s}
+.scanfield:focus-within .laser{opacity:.75;animation:sweep 2.2s ease-in-out infinite}
+@keyframes sweep{0%{background-position:-60% 0}50%{background-position:160% 0}100%{background-position:-60% 0}}
+/* After each scan the box flashes the colour of what happened. */
+.scanbox.flash-ok .inp{animation:fok .7s ease-out}
+.scanbox.flash-warn .inp{animation:fwarn .7s ease-out}
+.scanbox.flash-bad .scanfield{animation:shake .45s ease-out}
+.scanbox.flash-bad .inp{animation:fbad .7s ease-out}
+@keyframes fok{0%{box-shadow:0 0 0 8px color-mix(in srgb,var(--ok) 45%,transparent);border-color:var(--ok)}}
+@keyframes fwarn{0%{box-shadow:0 0 0 8px color-mix(in srgb,var(--warn) 45%,transparent);border-color:var(--warn)}}
+@keyframes fbad{0%,40%{box-shadow:0 0 0 8px color-mix(in srgb,var(--danger) 45%,transparent);border-color:var(--danger)}}
+@keyframes shake{20%{transform:translateX(-6px)}40%{transform:translateX(6px)}60%{transform:translateX(-4px)}80%{transform:translateX(2px)}}
+.st-bad{--st:var(--danger)}
+.feed .li.fresh{animation:feedin .5s cubic-bezier(.2,.9,.3,1.2) both}
+@keyframes feedin{from{opacity:0;transform:translateY(-12px) scale(.98);background:var(--primary-wash)}}
+.tally{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:16px 0 8px}
+.tally .sect-t{margin-right:4px}
+.tpill{font-size:12.5px;color:var(--fg-dim);padding:3px 10px;border-radius:999px;background:var(--surface-2);border:1px solid var(--line)}
+.tpill b{font-weight:800}
+.tpill.ok b{color:var(--ok)}.tpill.warn b{color:var(--warn)}.tpill.bad b{color:var(--danger)}
+.dest{border-left:4px solid var(--st-shelved)}
+.dest.pulse{animation:destpulse .9s cubic-bezier(.2,.8,.2,1)}
+@keyframes destpulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--st-shelved) 55%,transparent)}100%{box-shadow:0 0 0 14px transparent}}
+.dest-tag{font-size:18px;font-weight:800;color:var(--st-shelved);background:color-mix(in srgb,var(--st-shelved) 12%,transparent);padding:2px 10px;border-radius:8px}
+.dest-tag.none{color:var(--fg-faint);background:var(--surface-2);font-weight:600;font-size:15px}
 
 /* ---------- stock tiles ---------- */
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:14px}
@@ -1103,6 +1148,28 @@ const focusScan = () => { const i = $("#scanin"); if (i) { i.focus(); i.select?.
 function feedPush(kind, bc, msg, undoable) {
   S.scanFeed = [{ kind, bc, msg, t: Date.now(), undoable: !!undoable }, ...S.scanFeed]
     .slice(0, SCANFEED_MAX);
+  /* The feed only keeps the last few; the tally counts the whole session. */
+  S.scanTally = S.scanTally || { ok: 0, warn: 0, bad: 0 };
+  S.scanTally[kind === "ok" ? "ok" : kind === "warn" ? "warn" : "bad"]++;
+}
+
+/* Small line icons for the scan modes. Static markup, nothing from a scan. */
+const MODE_ICON = {
+  receive: '<path d="M12 3v11"/><path d="m7 9 5 5 5-5"/><path d="M4 16v4h16v-4"/>',
+  shelve:  '<path d="M4 3v18M20 3v18M4 9h16M4 15h16"/>',
+  zone:    '<path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/>',
+  branch:  '<path d="M3 9l2-5h14l2 5"/><path d="M4 9v11h16V9"/><path d="M9 20v-6h6v6"/>',
+  release: '<path d="M2 6h12v10H2z"/><path d="M14 9h4l3 3v4h-7"/><circle cx="6" cy="18" r="2"/><circle cx="17" cy="18" r="2"/>',
+  deliver: '<circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/>',
+  lookup:  '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  barcode: '<path d="M4 5v14M7 5v14M10 5v14M14 5v14M16 5v14M20 5v14"/>',
+};
+function icon(name, cls) {
+  const i = el("span", "ico" + (cls ? " " + cls : ""));
+  i.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" ' +
+    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    (MODE_ICON[name] || "") + "</svg>";
+  return i;
 }
 
 /* One parcel, by barcode, with the money masked to whatever the reader is
@@ -1345,6 +1412,13 @@ async function doUndo() {
   render(); focusScan();
 }
 
+/* The "filing to" card pulses once whenever its target changes. */
+function destPulse(now) {
+  const changed = (now || "") !== (S._destShown == null ? "" : S._destShown);
+  S._destShown = now || "";
+  return changed && now ? " pulse" : "";
+}
+
 function vScan() {
   const v = el("section");
 
@@ -1371,9 +1445,12 @@ function vScan() {
   /* mode */
   const modes = el("div", "modes");
   for (const k in MODES) {
-    const b = el("button", "mode" + (k === S.mode ? " on" : ""));
-    b.append(el("b", null, MODES[k].label));
-    b.append(el("span", null, MODES[k].sub));
+    const b = el("button", "mode m-" + k + (k === S.mode ? " on" : ""));
+    b.append(icon(k));
+    const tx = el("div", "mode-tx");
+    tx.append(el("b", null, MODES[k].label));
+    tx.append(el("span", null, MODES[k].sub));
+    b.append(tx);
     b.onclick = () => { S.mode = k; render(); focusScan(); };
     modes.append(b);
   }
@@ -1381,15 +1458,12 @@ function vScan() {
 
   /* where it is going */
   if (S.mode === "shelve") {
-    const d = el("div", "card pad");
+    const d = el("div", "card pad dest" + destPulse(S.dest.shelf || S.dest.zone));
     d.style.marginBottom = "12px";
     const r = el("div", "row");
     r.append(el("span", "li-s", "Filing to"));
     const now = S.dest.shelf || S.dest.zone;
-    const tag = el("span", "mono", now || "nowhere yet");
-    tag.style.fontSize = "17px";
-    tag.style.fontWeight = "700";
-    if (!now) tag.style.color = "var(--fg-faint)";
+    const tag = el("span", "mono dest-tag" + (now ? "" : " none"), now || "nowhere yet");
     r.append(tag);
     const sel = el("select", "inp sm");
     sel.style.width = "auto"; sel.style.minHeight = "34px"; sel.style.marginLeft = "auto";
@@ -1441,13 +1515,11 @@ function vScan() {
     v.append(d);
   }
   if (S.mode === "zone") {
-    const d = el("div", "card pad");
+    const d = el("div", "card pad dest" + destPulse(S.scanZone));
     d.style.marginBottom = "12px";
     const r = el("div", "row");
     r.append(el("span", "li-s", "Assigning to zone"));
-    const tag = el("span", "mono", S.scanZone || "none yet");
-    tag.style.fontSize = "17px"; tag.style.fontWeight = "700";
-    if (!S.scanZone) tag.style.color = "var(--fg-faint)";
+    const tag = el("span", "mono dest-tag" + (S.scanZone ? "" : " none"), S.scanZone || "none yet");
     r.append(tag);
     const sel = el("select", "inp sm");
     sel.style.width = "auto"; sel.style.minHeight = "34px"; sel.style.marginLeft = "auto";
@@ -1491,13 +1563,22 @@ function vScan() {
   }
 
   /* the gun */
-  const form = el("form", "scanbox");
+  /* A new result since the last draw flashes the box in its colour. */
+  const latest = S.scanFeed[0];
+  const isNew = !!latest && latest.t !== S._flashT;
+  if (latest) S._flashT = latest.t;
+  const form = el("form", "scanbox m-" + S.mode +
+    (isNew ? " flash-" + (latest.kind === "ok" ? "ok" : latest.kind === "warn" ? "warn" : "bad") : ""));
+  const fld = el("div", "scanfield");
+  fld.append(icon("barcode", "scan-ico"));
+  fld.append(el("i", "laser"));
   const inp = el("input", "inp mono");
   inp.id = "scanin";
   inp.placeholder = S.mode === "shelve" ? "Scan a shelf label, then parcels…" : "Scan a barcode…";
   inp.autocomplete = "off"; inp.autocapitalize = "off"; inp.spellcheck = false;
   inp.enterKeyHint = "go";
-  form.append(inp);
+  fld.append(inp);
+  form.append(fld);
   const go = el("button", "btn pri", S.scanBusy ? "…" : "Enter");
   go.type = "submit";
   go.disabled = !!S.scanBusy;
@@ -1528,9 +1609,20 @@ function vScan() {
       : "Each scan will " + MODES[S.mode].verb.toLowerCase() + " the parcel and show up here."));
     v.append(e);
   } else {
-    const list = el("div", "list");
+    const t = S.scanTally || { ok: 0, warn: 0, bad: 0 };
+    const tally = el("div", "tally");
+    const pill = (cls, n, label) => {
+      const p = el("span", "tpill " + cls);
+      p.append(el("b", "num", nf0.format(n)), document.createTextNode(" " + label));
+      return p;
+    };
+    tally.append(el("span", "sect-t", "This session"),
+      pill("ok", t.ok, "done"), pill("warn", t.warn, "skipped"), pill("bad", t.bad, "refused"));
+    v.append(tally);
+    const list = el("div", "list feed");
     for (const f of S.scanFeed) {
-      const li = el("div", "li click");
+      const kind = f.kind === "ok" ? "delivered" : f.kind === "warn" ? "received" : "bad";
+      const li = el("div", "li click rec st-" + kind + (f === latest && isNew ? " fresh" : ""));
       /* A scan line is the quickest way back to the parcel it was about. */
       li.onclick = () => openParcel(f.bc);
       const m = el("div", "li-m");
@@ -1541,7 +1633,7 @@ function vScan() {
       m.append(nm);
       m.append(el("div", "li-s", f.msg));
       li.append(m);
-      li.append(el("span", "li-s", new Date(f.t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })));
+      li.append(el("span", "li-s mono", new Date(f.t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })));
       list.append(li);
     }
     v.append(list);
@@ -6858,7 +6950,7 @@ async function boot() {
     S.session = session || null;
     if ((S.session?.user?.id || null) !== was) {
       S.me = null; S.staff = []; S.rows = null;
-      S.zones = []; S.scanFeed = []; S.undo = null; S.dest = { zone: "", shelf: "" };
+      S.zones = []; S.scanFeed = []; S.scanTally = null; S.undo = null; S.dest = { zone: "", shelf: "" };
       S.stats = null; S.zoneStats = null; S.page = 0; S.q = "";
       S.filters = { status: "", zone: "", paid: "" };
       S.money = null; S.cfg = null; S.customers = null;
