@@ -276,12 +276,34 @@ select.inp{appearance:none;background-image:linear-gradient(45deg,transparent 49
 .empty{text-align:center;padding:44px 20px;color:var(--fg-dim)}
 .empty b{display:block;color:var(--fg);font-size:16px;margin-bottom:5px}
 
-/* ---------- staff + records lists ---------- */
-.list{display:flex;flex-direction:column;gap:1px;background:var(--line);border-radius:var(--r);overflow:hidden;border:1px solid var(--line)}
-.li{background:var(--surface);padding:13px 15px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+/* ---------- staff + records lists ----------
+   Each row is its own small card, so a long list reads as items rather than
+   a spreadsheet, and a status colour runs down each one's left edge. */
+.list{display:flex;flex-direction:column;gap:6px}
+.li{
+  position:relative;background:var(--surface);padding:12px 15px;
+  display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+  border:1px solid var(--line);border-radius:var(--r-sm);
+  box-shadow:0 1px 2px rgba(18,23,53,.04);
+}
+.li.rec{padding-left:19px;overflow:hidden}
+.li.rec::before{
+  content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--st,var(--line-strong));
+  transition:width .2s cubic-bezier(.2,.8,.2,1);
+}
+.li.rec:hover::before{width:6px}
+.st-expected{--st:var(--st-expected)}.st-received{--st:var(--st-received)}.st-shelved{--st:var(--st-shelved)}
+.st-at_branch{--st:var(--warn)}.st-released{--st:var(--st-released)}.st-delivered{--st:var(--st-delivered)}
+.li.sel{background:var(--primary-wash);border-color:color-mix(in srgb,var(--primary) 45%,var(--line))}
 .li-m{min-width:0;flex:1 1 220px}
-.li-nm{font-weight:600;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.li-s{font-size:12.5px;color:var(--fg-dim);margin-top:2px}
+.li-nm{font-weight:700;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.li-nm .mono{letter-spacing:.02em}
+.li-s{font-size:12.5px;color:var(--fg-dim);margin-top:3px}
+.loc{
+  display:inline-block;font-size:11.5px;font-weight:600;color:var(--primary);
+  background:var(--primary-wash);padding:1px 7px;border-radius:6px;margin-right:2px;
+}
+.amt{font-weight:700;font-size:14.5px}
 .li-a{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
 .me{font-size:11px;color:var(--fg-faint);font-weight:600}
 
@@ -359,14 +381,20 @@ select.inp{appearance:none;background-image:linear-gradient(45deg,transparent 49
 .lp{margin-left:auto;font-weight:600;font-size:13.5px}
 
 /* ---------- parcel drawer ---------- */
-.li.click{cursor:pointer}
-.li.click:hover{background:var(--surface-2)}
+.li.click{cursor:pointer;transition:background-color .18s,border-color .18s,box-shadow .22s,transform .2s cubic-bezier(.2,.8,.2,1)}
+.li.click:hover{background:var(--surface-2);border-color:var(--line-strong);transform:translateX(3px);box-shadow:var(--shadow)}
+.li.click:active{transform:scale(.99)}
+/* Rows fly in one after another when a new page of them arrives. */
+.list.stagger>.li{animation:rise .42s cubic-bezier(.2,.8,.2,1) both;}
 .drawer{
   background:var(--surface);width:min(620px,100%);max-height:92dvh;
-  border-radius:var(--r-lg);box-shadow:var(--shadow-lg);
-  display:flex;flex-direction:column;overflow:hidden;
+  border-radius:var(--r-lg);box-shadow:var(--shadow-lg);border:1px solid var(--line);
+  display:flex;flex-direction:column;overflow:hidden;position:relative;
 }
-.dhead{display:flex;align-items:flex-start;gap:12px;padding:18px 20px 14px;border-bottom:1px solid var(--line)}
+.drawer::before{content:"";position:absolute;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,var(--accent),var(--primary))}
+.dhead{display:flex;align-items:flex-start;gap:12px;padding:20px 20px 14px;border-bottom:1px solid var(--line);
+  background:linear-gradient(180deg,var(--surface-2),var(--surface))}
+.dt b{font-family:var(--mono)}
 .dt{min-width:0;flex:1}
 .dt b{display:block;font-size:16px;letter-spacing:.01em}
 .dt>span{display:block;font-size:13.5px;color:var(--fg-dim);margin-top:2px}
@@ -1937,7 +1965,7 @@ function pager() {
 }
 
 function recordRow(r) {
-  const li = el("div", "li click");
+  const li = el("div", "li click rec st-" + r.status + (S.sel.has(r.barcode) ? " sel" : ""));
   li.onclick = () => openParcel(r.barcode);
 
   /* The tick is its own target: tapping the row opens the parcel, tapping the
@@ -1972,16 +2000,18 @@ function recordRow(r) {
      match rather than leave you guessing which row it hit. */
   if (r.customer) bits.push("for " + r.customer + (r.client_id ? " (" + r.client_id + ")" : ""));
   else if (r.client_id) bits.push("client " + r.client_id);
-  bits.push("at " + (r.shelf || r.zone || "—"));
   if (r.shipment) bits.push(r.shipment);
-  m.append(el("div", "li-s", bits.join("  ·  ")));
+  const sub = el("div", "li-s");
+  /* Where it is, as a little location tag — the first thing anyone looks for. */
+  sub.append(el("span", "loc mono", "at " + (r.shelf || r.zone || "—")));
+  if (bits.length) sub.append(document.createTextNode("  " + bits.join("  ·  ")));
+  m.append(sub);
   li.append(m);
 
   const a = el("div", "li-a");
   /* r.cost is null for a scanner — the database masked it, not the screen. */
   if (r.cost != null) {
-    const c = el("span", "mono num", money(r.cost));
-    c.style.fontWeight = "600";
+    const c = el("span", "mono num amt", money(r.cost));
     a.append(c);
     a.append(el("span", "chip " + (r.paid ? "s-delivered" : "off"), r.paid ? "Paid" : "Unpaid"));
   }
@@ -6698,6 +6728,28 @@ const calm = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 function afterRender() {
   slideTabPill();
   rollNumbers();
+  staggerLists();
+}
+
+/* A list whose rows changed (new page, new search, first load) lets them
+   arrive one after another. A re-render of the same rows — a tick, a scan —
+   leaves them still. */
+function staggerLists() {
+  const main = document.querySelector("main");
+  /* The scan feed changes with every beep; it must not dance. */
+  if (!main || S.tab === "scan") return;
+  S._lists = S._lists || {};
+  main.querySelectorAll(".list").forEach((list, n) => {
+    const rows = list.children;
+    if (!rows.length) return;
+    const key = rows.length + "|" + [...rows].slice(0, 3).map(r => r.textContent.slice(0, 40)).join("|");
+    const id = S.tab + "|" + n;
+    const changed = S._lists[id] !== key;
+    S._lists[id] = key;
+    if (!changed || calm()) return;
+    [...rows].forEach((r, i) => { r.style.animationDelay = Math.min(i, 24) * 22 + "ms"; });
+    list.classList.add("stagger");
+  });
 }
 
 /* The navy pill slides from the last section to this one. */
