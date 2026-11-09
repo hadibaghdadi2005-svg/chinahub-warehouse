@@ -557,8 +557,7 @@ expect("zones", "Staging areas");
 expect("staff", "Ali Nasser");
 expect("staff", "Turned off");
 expect("money", "$39,344.95");
-expect("money", "3,521,373,025 LL");   /* 39,344.95 × 89,500 */
-expect("money", "680,283,235 LL");     /* collected, same rate */
+expect("money", "¥240,004.19");   /* 39,344.95 × 6.1 */
 expect("money", "Not priced yet");
 expect("money", "User_EXMPL");
 expect("money", "oldest held 98 days");

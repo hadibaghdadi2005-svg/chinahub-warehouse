@@ -2972,9 +2972,10 @@ async function loadLabelShipments() {
    adding up eight thousand charges in a browser would be both slow and a
    second place for the arithmetic to go wrong. */
 
-const lbp = n => S.money
-  ? nf0.format(Math.round((Number(n) || 0) * (Number(S.money.lbp_rate) || 0))) + " LL"
-  : "";
+/* The same amount in yuan, at the current CNY/USD rate. */
+const cnyRate = () => Number(S.cfg && S.cfg.cnyPerUsd) || 6.1;
+const yuan = n => "¥" + nf2.format((Number(n) || 0) * cnyRate());
+const lbp = n => S.money ? yuan(n) : "";
 
 function vMoney() {
   const v = el("section");
@@ -3450,8 +3451,8 @@ function ratesPanel() {
     g.append(r);
   }
   card.append(g);
-  card.append(el("div", "sub2", "1 USD = " + nf0.format(Number(S.money.lbp_rate) || 0) +
-    " LL. A charge is worked out when a parcel is priced, so changing a rate " +
+  card.append(el("div", "sub2", "1 USD = ¥" + cnyRate() +
+    ". A charge is worked out when a parcel is priced, so changing a rate " +
     "here does not move a charge already made."));
 
   /* show monthly CNY/USD rates */
@@ -3747,7 +3748,7 @@ function vDrawer() {
 
   /* Money, only if the database sent it. */
   if (p.cost != null) {
-    kv("Charge", Number(p.cost) ? money(p.cost) + "  ·  " + lbpAt(p.cost) : "not priced yet");
+    kv("Charge", Number(p.cost) ? money(p.cost) + "  ·  " + (Number(p.cny) ? "¥" + nf2.format(Number(p.cny)) : lbpAt(p.cost)) : "not priced yet");
     const lane = laneFor(p);
     if (lane) {
       const qty = lane.basis === "cbm" ? Number(p.cbm) || 0 : Number(p.weight_kg) || 0;
@@ -3885,8 +3886,7 @@ function laneCost(p) {
   return +(qty * Number(L.price)).toFixed(2);
 }
 
-const lbpAt = n => S.cfg && Number(S.cfg.lbpRate)
-  ? nf0.format(Math.round((Number(n) || 0) * Number(S.cfg.lbpRate))) + " LL" : "";
+const lbpAt = n => yuan(n);
 
 function fmtWhen(iso) {
   if (!iso) return "—";
