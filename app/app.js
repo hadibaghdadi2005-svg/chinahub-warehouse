@@ -124,7 +124,8 @@ const S = {
 
   /* summary */
   summaryData: null,
-  summaryDate: "",
+  summaryFrom: "",     /* date range, either end may be empty */
+  summaryTo: "",
 
   /* waseet */
   waseetData: null,
@@ -4608,14 +4609,27 @@ function vSummary() {
   /* date filter */
   const toolRow = el("div", "row");
   toolRow.style.marginBottom = "14px"; toolRow.style.gap = "8px"; toolRow.style.flexWrap = "wrap";
-  const dateInp = el("input", "inp");
-  dateInp.type = "date"; dateInp.value = S.summaryDate;
-  dateInp.style.width = "auto";
-  dateInp.onchange = () => { S.summaryDate = dateInp.value; loadSummary(); };
-  toolRow.append(dateInp);
-  if (S.summaryDate) {
-    const dc = el("button", "btn", "Clear date");
-    dc.onclick = () => { S.summaryDate = ""; loadSummary(); };
+  toolRow.style.alignItems = "center";
+  const dateBox = (label, key) => {
+    const w = el("label", "row");
+    w.style.gap = "6px"; w.style.alignItems = "center";
+    w.append(el("span", "sub", label));
+    const inp = el("input", "inp");
+    inp.type = "date"; inp.value = S[key]; inp.style.width = "auto";
+    inp.onchange = () => {
+      S[key] = inp.value;
+      /* keep the range the right way round */
+      if (S.summaryFrom && S.summaryTo && S.summaryFrom > S.summaryTo)
+        [S.summaryFrom, S.summaryTo] = [S.summaryTo, S.summaryFrom];
+      loadSummary();
+    };
+    w.append(inp);
+    return w;
+  };
+  toolRow.append(dateBox("From", "summaryFrom"), dateBox("To", "summaryTo"));
+  if (S.summaryFrom || S.summaryTo) {
+    const dc = el("button", "btn", "Clear dates");
+    dc.onclick = () => { S.summaryFrom = ""; S.summaryTo = ""; loadSummary(); };
     toolRow.append(dc);
   }
   const expBtn = el("button", "btn", "Export");
@@ -4669,24 +4683,33 @@ function vSummary() {
 
 async function loadSummary() {
   S.summaryData = null; render();
-  const dateFilter = S.summaryDate || null;
+  /* From and To are whole days: To runs up to the start of the next day,
+     so a timestamp late on that day still counts. */
+  const from = S.summaryFrom || null;
+  const toNext = S.summaryTo
+    ? new Date(Date.parse(S.summaryTo + "T00:00:00Z") + 864e5).toISOString().slice(0, 10) : null;
+  const inRange = (qy, col) => {
+    if (from) qy = qy.gte(col, from);
+    if (toNext) qy = qy.lt(col, toNext);
+    return qy;
+  };
   const promises = [];
 
   let appQy = S.sb.from("parcels_view")
     .select("cost,paid", { count: "exact" })
     .not("status", "in", "(expected)");
-  if (dateFilter) appQy = appQy.eq("shipped_at", dateFilter);
+  appQy = inRange(appQy, "shipped_at");
   promises.push(appQy);
 
   let shipQy = S.sb.from("shipments")
     .select("total,paid_amount,paid_at,arrived_at");
-  if (dateFilter) shipQy = shipQy.eq("arrived_at", dateFilter);
+  shipQy = inRange(shipQy, "arrived_at");
   promises.push(shipQy);
 
   let rcvQy = S.sb.from("parcels_view")
     .select("barcode", { count: "exact" })
     .in("status", ["received", "shelved", "at_branch", "released"]);
-  if (dateFilter) rcvQy = rcvQy.eq("shipped_at", dateFilter);
+  rcvQy = inRange(rcvQy, "shipped_at");
   promises.push(rcvQy);
 
   try {
@@ -4735,7 +4758,10 @@ function exportSummary() {
     ["Received in Lebanon", sd.received_count, "", ""],
   ];
   const csv = rows.map(r => r.map(csvCell).join(",")).join("\n");
-  const name = "summary-" + (S.summaryDate || new Date().toISOString().slice(0, 10)) + ".csv";
+  const today = new Date().toISOString().slice(0, 10);
+  const span = S.summaryFrom || S.summaryTo
+    ? (S.summaryFrom || "start") + "_to_" + (S.summaryTo || today) : today;
+  const name = "summary-" + span + ".csv";
   if (offerFile(name, csv)) toast("Summary exported", "ok");
   else toast("The browser would not save the file.", "bad");
 }
