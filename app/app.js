@@ -4398,7 +4398,9 @@ function shipmentRow(r) {
     r.mode === "sea" ? "Sea" : "Air"));
   if (r.container) nm.append(el("span", "chip", r.container));
   if (!r.delivered_at) nm.append(el("span", "chip s-received", "not delivered"));
-  if (r.shelf || r.zone) nm.append(el("span", "chip s-shelved", "at " + (r.shelf || r.zone)));
+  /* a branch gets its own chip beside the buttons */
+  if ((r.shelf || r.zone) && !branchZones().some(z => z.code === r.zone))
+    nm.append(el("span", "chip s-shelved", "at " + (r.shelf || r.zone)));
   m.append(nm);
 
   const bits = ["#" + r.ship_num];
@@ -4455,8 +4457,34 @@ function shipmentRow(r) {
     w.onclick = () => sendShipToWaseet(r);
     a.append(w);
   }
+  /* The branch office (Hamra): clients collect their goods there. Sending a
+     shipment files it in that branch's zone, the same as scanning its label
+     there in Zone mode. */
+  const atBranch = branchZones().find(z => z.code === r.zone);
+  const br = theBranch() || branchZones()[0];
+  if (atBranch) {
+    a.append(el("span", "chip s-released", "At " + (atBranch.label || atBranch.code)));
+    const undo = el("button", "btn sm", "Undo");
+    undo.style.fontSize = "11px";
+    undo.onclick = () => moveShipToBranch(r, null);
+    a.append(undo);
+  } else if (br) {
+    const hb = el("button", "btn sm", "→ " + (br.label || br.code));
+    hb.onclick = () => moveShipToBranch(r, br);
+    a.append(hb);
+  }
   li.append(a);
   return li;
+}
+
+async function moveShipToBranch(r, br) {
+  const { data, error } = await S.sb.rpc("locate_shipments", {
+    p_rows: [{ ship_num: r.ship_num, zone: br ? br.code : null, shelf: null }] });
+  if (error) { toast(error.message, "bad"); return; }
+  if (!data || !data.located) { toast("Shipment #" + r.ship_num + " was not found.", "bad"); return; }
+  toast(br ? "Shipment #" + r.ship_num + " sent to " + (br.label || br.code)
+           : "Shipment #" + r.ship_num + " taken back from the branch", "ok");
+  loadShipments(); loadShipStats();
 }
 
 async function markShipment(r, what) {

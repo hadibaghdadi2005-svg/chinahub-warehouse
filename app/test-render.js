@@ -342,7 +342,7 @@ mod += `
       container:"A-098", boxes:33, goods:"UTENSILS", weight_kg:3.8, volume_cbm:0,
       price:10.5, total:39.9, paid_amount:39.9,
       raised_at:"2026-10-29", arrived_at:"2026-10-29",
-      delivered_at:"2026-10-30", paid_at:"2026-10-30" },
+      delivered_at:"2026-10-30", paid_at:"2026-10-30", zone:"HAMRA", shelf:null },
   ];
   build("shipping", () => vShipping());
   S.shipFilters = { mode:"sea", paid:"unpaid" };
@@ -726,6 +726,9 @@ expect("shipping", "0.055 CBM × $450.00/CBM");
 expect("shipping", "3.8 kg × $10.50/kg");
 expect("shipping", "Mark paid");
 expect("shipping", "not delivered");
+/* one shipment can go to the branch, the other is already there */
+expect("shipping", "→ Hamra office");
+expect("shipping", "At Hamra office");
 expect("shipping-filtered", "Clear");
 expect("shipping-none", "Nothing matches");
 if (/Shipping/.test((out["tabs-scanner-shipping"] || {}).text || "")) {
