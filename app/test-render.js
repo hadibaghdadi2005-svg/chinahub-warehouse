@@ -727,7 +727,7 @@ expect("shipping", "3.8 kg × $10.50/kg");
 expect("shipping", "Mark paid");
 expect("shipping", "not delivered");
 /* one shipment can go to the branch, the other is already there */
-expect("shipping", "→ Hamra office");
+expect("shipping", "Send to…");
 expect("shipping", "At Hamra office");
 expect("shipping-filtered", "Clear");
 expect("shipping-none", "Nothing matches");

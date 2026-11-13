@@ -452,7 +452,11 @@ function shell(view) {
   const brand = el("div", "brand");
   brand.append(logoMark(entering));
   const bt = el("div", "brand-tx");
-  bt.append(el("div", "logo-t", whName()));
+  /* A phone has room for the first word only; the full name is in the tab title. */
+  const lt = el("div", "logo-t");
+  lt.append(el("span", "nm-full", whName()),
+            el("span", "nm-short", whName().split(/\s+/)[0]));
+  bt.append(lt);
   bt.append(el("div", "logo-s", S.me.name));
   brand.append(bt);
 
@@ -464,6 +468,13 @@ function shell(view) {
   sb.onclick = openSearch;
   who.append(sb);
   who.append(roleChip(S.me.role));
+  if (S.updateReady) {
+    const up = el("button", "btn sm upd", "Update");
+    up.type = "button";
+    up.title = "A new version of the app is ready — reload to use it";
+    up.onclick = () => location.reload();
+    who.append(up);
+  }
   const acc = el("button", "btn sm", "Account");
   acc.onclick = openAccount;
   who.append(acc);
@@ -4228,14 +4239,14 @@ function vShipping() {
   const head = el("div", "vhead");
   const h = el("div");
   h.append(el("h2", null, "Shipping"));
-  h.append(el("div", "sub", "Clients who ship with us but buy from their own suppliers. " +
+  h.append(el("div", "sub hide-phone", "Clients who ship with us but buy from their own suppliers. " +
     "Priced by the shipping department, per CBM by sea and per kilo by air."));
   head.append(h);
   v.append(head);
   v.append(bulkStrip());
 
   const s = S.shipStats;
-  const tiles = el("div", "tiles");
+  const tiles = el("div", "tiles strip-phone");
   const tile = (k, label, val, note, on, colour) => {
     const b = el("button", "tile" + (on ? " on" : ""));
     b.append(el("div", "k", label));
@@ -4305,8 +4316,14 @@ function vShipping() {
   });
   v.append(bar);
 
-  /* date filter + sort + export row */
-  const toolRow = el("div", "row");
+  /* date filter + sort + export row; on a phone it waits behind a Filters button */
+  const narrowed = !!(S.shipDate || S.shipSort);
+  const ft = el("button", "btn sm phone-only filt-t", (S.shipToolsOpen ? "Hide filters" : "Filters") +
+    (narrowed && !S.shipToolsOpen ? " •" : ""));
+  ft.type = "button";
+  ft.onclick = () => { S.shipToolsOpen = !S.shipToolsOpen; render(); };
+  v.append(ft);
+  const toolRow = el("div", "row phone-collapse" + (S.shipToolsOpen ? " open" : ""));
   toolRow.style.marginBottom = "14px"; toolRow.style.gap = "8px"; toolRow.style.flexWrap = "wrap";
   const dateInp = el("input", "inp");
   dateInp.type = "date"; dateInp.value = S.shipDate;
@@ -4422,8 +4439,7 @@ function shipmentRow(r) {
   a.append(t);
   if (r.paid_at && owed <= 0) {
     a.append(el("span", "chip s-delivered", "Paid"));
-    const ub = el("button", "btn sm", "Mark unpaid");
-    ub.style.fontSize = "11px";
+    const ub = el("button", "btn sm ghost", "Mark unpaid");
     ub.onclick = () => markShipment(r, { unpaid: true });
     a.append(ub);
   } else {
@@ -4435,8 +4451,7 @@ function shipmentRow(r) {
   }
   if (r.delivered_at) {
     a.append(el("span", "li-s", "delivered " + fmtDate(r.delivered_at)));
-    const ud = el("button", "btn sm", "Undo delivered");
-    ud.style.fontSize = "11px";
+    const ud = el("button", "btn sm ghost", "Undo delivered");
     ud.onclick = () => markShipment(r, { undeliver: true });
     a.append(ud);
   } else {
@@ -4444,34 +4459,35 @@ function shipmentRow(r) {
     d.onclick = () => markShipment(r, { delivered: true });
     a.append(d);
   }
-  if (r.delivery_to === "waseet") {
-    a.append(el("span", "chip s-released", "With Waseet"));
-    const undo = el("button", "btn sm", "Undo");
-    undo.style.fontSize = "11px";
-    undo.onclick = () => undoShipWaseet(r);
-    a.append(undo);
-  } else {
-    const w = el("button", "btn sm", "→ Waseet");
-    w.style.background = "var(--accent, #8e44ad)"; w.style.color = "#fff";
-    w.style.borderColor = "var(--accent, #8e44ad)";
-    w.onclick = () => sendShipToWaseet(r);
-    a.append(w);
-  }
-  /* The branch office (Hamra): clients collect their goods there. Sending a
-     shipment files it in that branch's zone, the same as scanning its label
-     there in Zone mode. */
+  /* Where it is going: Waseet (cash on delivery) or the branch office (Hamra),
+     where clients collect. Once sent, a chip says where with an Undo; until
+     then one quiet "Send to…" menu holds both, so the row has a single
+     strong button (Mark paid). Hamra files the shipment in that branch's
+     zone, the same as scanning its label there in Zone mode. */
   const atBranch = branchZones().find(z => z.code === r.zone);
   const br = theBranch() || branchZones()[0];
-  if (atBranch) {
-    a.append(el("span", "chip s-released", "At " + (atBranch.label || atBranch.code)));
-    const undo = el("button", "btn sm", "Undo");
-    undo.style.fontSize = "11px";
-    undo.onclick = () => moveShipToBranch(r, null);
+  const sentChip = (label, undoFn) => {
+    a.append(el("span", "chip s-released", label));
+    const undo = el("button", "btn sm ghost", "Undo");
+    undo.onclick = undoFn;
     a.append(undo);
-  } else if (br) {
-    const hb = el("button", "btn sm", "→ " + (br.label || br.code));
-    hb.onclick = () => moveShipToBranch(r, br);
-    a.append(hb);
+  };
+  if (r.delivery_to === "waseet") sentChip("With Waseet", () => undoShipWaseet(r));
+  if (atBranch) sentChip("At " + (atBranch.label || atBranch.code), () => moveShipToBranch(r, null));
+  const dests = [];
+  if (r.delivery_to !== "waseet") dests.push(["waseet", "Waseet"]);
+  if (!atBranch && br) dests.push(["branch", br.label || br.code]);
+  if (dests.length) {
+    const send = el("select", "inp sm send-to");
+    send.setAttribute("aria-label", "Send shipment #" + r.ship_num + " to");
+    const first = el("option", null, "Send to…"); first.value = "";
+    send.append(first);
+    for (const [v, t] of dests) { const o = el("option", null, t); o.value = v; send.append(o); }
+    send.onchange = () => {
+      if (send.value === "waseet") sendShipToWaseet(r);
+      else if (send.value === "branch") moveShipToBranch(r, br);
+    };
+    a.append(send);
   }
   li.append(a);
   return li;
@@ -7351,18 +7367,13 @@ if ("serviceWorker" in navigator) {
     } catch (_) {}
   });
 
-  let reloading = false;
+  /* Nobody signed in has nothing to lose, so the page simply reloads. Anyone
+     working gets a small Update button in the header instead of a bar over
+     the list, and reloads when it suits them. */
   navigator.serviceWorker.addEventListener("controllerchange", () => {
-    if (reloading) return;
-    reloading = true;
-    const t = el("div", "toast ok");
-    t.append(document.createTextNode("A new version is ready "));
-    const b = el("button", "btn sm", "Reload");
-    b.style.marginLeft = "8px";
-    b.onclick = () => location.reload();
-    t.append(b);
-    const box = $("#toasts");
-    if (box) box.append(t);
-    else location.reload();
+    if (S.updateReady) return;
+    if (!S.session || !S.me) { location.reload(); return; }
+    S.updateReady = true;
+    render();
   });
 }

@@ -682,3 +682,23 @@ main.enter .zbar i{animation:grow 1s .25s cubic-bezier(.2,.8,.2,1) both;transfor
   .tile:hover::before{transform:scaleX(0)}
   .tile.on::before{transform:scaleX(1)}
 }
+
+/* ---------- quieter header, rows and phone layout ---------- */
+.logo-t .nm-short{display:none}
+.btn.upd{background:var(--ok);border-color:var(--ok);color:#fff;font-weight:700}
+.btn.upd::before{content:"";width:7px;height:7px;border-radius:50%;background:#fff;display:inline-block;margin-right:6px}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--fg-dim);font-size:12px}
+.btn.ghost:hover{color:var(--fg);border-color:var(--line)}
+.inp.sm.send-to{width:auto;min-height:32px;padding:4px 28px 4px 10px;font-size:12.5px;font-weight:600}
+.phone-only{display:none}
+@media (max-width:560px){
+  .logo-t .nm-full{display:none}
+  .logo-t .nm-short{display:inline}
+  .hide-phone{display:none}
+  .phone-only{display:inline-flex}
+  .filt-t{margin-bottom:12px}
+  .phone-collapse:not(.open){display:none!important}
+  /* six tiles become one row you swipe, so the list starts on the first screen */
+  .tiles.strip-phone{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;padding-bottom:4px}
+  .tiles.strip-phone .tile{flex:0 0 46%;scroll-snap-align:start}
+}
