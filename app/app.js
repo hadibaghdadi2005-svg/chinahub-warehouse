@@ -5127,8 +5127,9 @@ async function loadWaseet() {
   sq = bulkShipFilter(sq);
   if (S.waseetDate) sq = sq.eq("arrived_at", S.waseetDate);
   if (wLike) {
-    sq = sq.or(["client.ilike." + wLike, "code.ilike." + wLike,
-                "ship_num::text.ilike." + wLike].join(","));
+    const sParts = ["client.ilike." + wLike, "code.ilike." + wLike, "phone.ilike." + wLike];
+    if (/^\d+$/.test(wTerm)) sParts.push("ship_num.eq." + wTerm);
+    sq = sq.or(sParts.join(","));
   }
   sq = sq.order("total", { ascending: S.waseetSort === "asc" });
 
