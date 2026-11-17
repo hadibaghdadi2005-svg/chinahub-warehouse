@@ -702,3 +702,21 @@ main.enter .zbar i{animation:grow 1s .25s cubic-bezier(.2,.8,.2,1) both;transfor
   .tiles.strip-phone{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;padding-bottom:4px}
   .tiles.strip-phone .tile{flex:0 0 46%;scroll-snap-align:start}
 }
+
+/* ------------------------------------------------------- hamra clients --- */
+.nav-badge{position:absolute;top:2px;left:calc(50% + 6px);min-width:18px;height:18px;padding:0 5px;
+  border-radius:9px;background:var(--danger);color:#fff;font-size:11px;font-weight:700;line-height:18px;
+  text-align:center;pointer-events:none}
+.hamra-push{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:6px}
+.hamra-push-t{flex:1 1 260px;min-width:0;display:flex;flex-direction:column;gap:3px}
+.hamra-w{align-items:flex-start}
+.hamra-where{display:flex;flex-direction:column;gap:3px;margin-top:6px}
+.hamra-pc{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.hamra-acts{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.hamra-sh{display:flex;align-items:center;gap:10px}
+.hamra-sh .btn{margin-left:auto}
+.hamra-note{margin:-2px 0 10px}
+.hamra-empty{padding:10px 2px 4px}
+.hamra-warn{color:var(--warn);font-weight:600}
+.hamra-add{gap:8px;margin-bottom:10px}
+.hamra-add .inp{flex:1 1 180px;max-width:260px}

@@ -594,6 +594,10 @@ function visibleTabs() {
     { id: "stock", label: "Stock", group: "warehouse" },
     { id: "zones", label: "Zones", group: "warehouse" },
   ];
+  if (sees_money()) {
+    const w = S.hamra ? Number(S.hamra.waiting_count) || 0 : 0;
+    t.push({ id: "hamra", label: "Hamra clients" + (w ? " · " + nf0.format(w) : ""), group: "warehouse" });
+  }
   if (sees_money()) t.push({ id: "money", label: "Money", group: "money" });
   if (canExport()) t.push({ id: "sales", label: "Sales Orders", group: "money" });
   if (sees_money()) t.push({ id: "waseet", label: "Waseet", group: "money" });
@@ -636,6 +640,7 @@ function goTab(id) {
     else { if (!S.stats) loadStats(); if (!S.rows) loadStock(); }
   }
   if (id === "zones" && !S.zoneStats) loadZoneStats();
+  if (id === "hamra") { loadHamra(); refreshPushState(); }
   /* Always fresh: a payment taken elsewhere must show here straight away. */
   if (id === "sales") { loadSales(); if (!S.stats) loadStats(); if (!S.money) loadMoney(); }
   if (id === "money") {
@@ -674,6 +679,12 @@ function bottomNav(list) {
   item("search", "Search", openSearch, false);
   const main = ["home", "scan", "stock"];
   item("more", "More", () => openMore(list), !main.includes(S.tab));
+  const waiting = S.hamra ? Number(S.hamra.waiting_count) || 0 : 0;
+  if (waiting && sees_money()) {
+    const more = nav.lastElementChild;
+    more.style.position = "relative";
+    more.append(el("span", "nav-badge", waiting > 99 ? "99+" : String(waiting)));
+  }
   return nav;
 }
 
@@ -811,6 +822,7 @@ document.addEventListener("keydown", e => {
 /* --------------------------------------------------------------- home --- */
 async function loadHome() {
   S.homeBusy = true; render();
+  if (sees_money()) loadHamra(true);
   const { data, error } = await S.sb.rpc("home_summary");
   S.homeBusy = false;
   if (error) { toast("Could not load Home — " + error.message, "bad"); render(); return; }
@@ -872,6 +884,11 @@ function vHome() {
     tile("On the way", n(d.on_the_way), "not arrived yet", toStock({ status: "expected" })),
     tile("At " + branchLabel(), n(d.at_branch), "waiting to be collected", toStock({ status: "at_branch" })),
     tile("With Waseet", n(d.with_waseet), "cash on delivery", sees_money() ? () => goTab("waseet") : toStock({ status: "released" })),
+  );
+  if (S.hamra && Number(S.hamra.waiting_count))
+    now.append(tile("For Hamra", n(S.hamra.waiting_count), "Hamra clients' parcels here, not at Hamra",
+      () => goTab("hamra"), "var(--warn)"));
+  now.append(
     tile("Over free days", n(d.late), "past " + d.free_days + " days", toStock({ paid: "late" }), "var(--warn)"),
     tile("Here too long", n(d.long), d.long_days + "+ days" + (d.long_owed != null ? " · " + money(d.long_owed) + " owed" : ""),
       toStock({ paid: "long" }), "var(--danger)"),
@@ -4811,6 +4828,329 @@ function exportSummary() {
 }
 
 /* ------------------------------------------------------------- waseet --- */
+/* ------------------------------------------------------- hamra clients --- */
+/* Clients who always collect from the Hamra office. When one of their parcels
+   is received at the warehouse instead, it shows here and every phone that
+   turned notifications on is told (server: hamra_alerts → hamra-push). */
+const VAPID_PUBLIC = "BKTsIfGm3YlCMDMPha3M88FAuan7cXUNq0caVdwluqPNivPljWks1YQzLbAQrp7yfm_4mYZyps5-gIeK7L7lvaI";
+
+/* quiet = a background refresh: render only if the count changed. */
+async function loadHamra(quiet) {
+  if (S.hamraBusy) return;
+  S.hamraBusy = true;
+  if (!quiet) render();
+  const { data, error } = await S.sb.rpc("hamra_overview");
+  S.hamraBusy = false;
+  if (error) {
+    if (!quiet) { toast("Could not load Hamra clients — " + error.message, "bad"); render(); }
+    return;
+  }
+  const before = S.hamra ? S.hamra.waiting_count : null;
+  S.hamra = data || { waiting: [], waiting_count: 0, clients: [], suggestions: [] };
+  if (!quiet || S.tab === "hamra" || before !== S.hamra.waiting_count) {
+    if (S.tab !== "scan" || before !== S.hamra.waiting_count) render();
+  }
+}
+
+async function setHamraClient(client_id, customer, state) {
+  const { error } = await S.sb.from("hamra_clients")
+    .upsert({ client_id, customer: customer || null, state }, { onConflict: "client_id" });
+  if (error) { toast(error.message, "bad"); return false; }
+  return true;
+}
+
+async function addHamraClients(list) {
+  if (!list.length) return;
+  const rows = list.map(c => ({ client_id: c.client_id, customer: c.customer || null, state: "on" }));
+  const { error } = await S.sb.from("hamra_clients").upsert(rows, { onConflict: "client_id" });
+  if (error) { toast(error.message, "bad"); return; }
+  toast(list.length === 1 ? (list[0].customer || list[0].client_id) + " added" : nf0.format(list.length) + " clients added", "ok");
+  loadHamra();
+}
+
+/* ------ phone notifications ------ */
+const pushSupported = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+const isIOS = () => /iP(hone|ad|od)/.test(navigator.userAgent) ||
+  (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const isInstalled = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+
+function b64uBytes(s) {
+  const b = atob(s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4));
+  return Uint8Array.from(b, c => c.charCodeAt(0));
+}
+
+/* S.push: "ios-install" | "unsupported" | "denied" | "on" | "off" */
+async function refreshPushState() {
+  let st;
+  if (!pushSupported()) st = isIOS() && !isInstalled() ? "ios-install" : "unsupported";
+  else if (Notification.permission === "denied") st = "denied";
+  else {
+    try {
+      const reg = await navigator.serviceWorker.getRegistration();
+      const sub = reg && await reg.pushManager.getSubscription();
+      st = sub && Notification.permission === "granted" ? "on" : "off";
+    } catch (_) { st = "off"; }
+  }
+  if (st !== S.push) { S.push = st; render(); }
+}
+
+async function pushTurnOn() {
+  S.pushBusy = true; render();
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") {
+      toast(perm === "denied" ? "Notifications are blocked for this app in the phone's settings." : "Notifications were not allowed.", "bad");
+      return;
+    }
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uBytes(VAPID_PUBLIC) });
+    const j = sub.toJSON();
+    const { error } = await S.sb.from("push_subscriptions").upsert(
+      { endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth, user_id: S.session.user.id },
+      { onConflict: "endpoint" });
+    if (error) { toast("Could not save this phone — " + error.message, "bad"); return; }
+    const r = await callFn("hamra-push", { test: true });
+    toast(r.ok ? "Notifications are on. A test one is on its way." : "Turned on, but the test failed — " + r.error, r.ok ? "ok" : "bad");
+  } catch (e) {
+    toast("Could not turn notifications on — " + String(e && e.message || e), "bad");
+  } finally {
+    S.pushBusy = false;
+    await refreshPushState();
+    render();
+  }
+}
+
+async function pushTurnOff() {
+  S.pushBusy = true; render();
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    const sub = reg && await reg.pushManager.getSubscription();
+    if (sub) {
+      await S.sb.from("push_subscriptions").delete().eq("endpoint", sub.endpoint);
+      await sub.unsubscribe();
+    }
+    toast("Notifications are off on this device.", "ok");
+  } catch (e) {
+    toast(String(e && e.message || e), "bad");
+  } finally {
+    S.pushBusy = false;
+    await refreshPushState();
+    render();
+  }
+}
+
+function hamraPushCard() {
+  const card = el("div", "card pad hamra-push");
+  const st = S.push;
+  const txt = el("div", "hamra-push-t");
+  const title = el("b", null,
+    st === "on" ? "Notifications are on for this device" :
+    st === "denied" ? "Notifications are blocked on this device" :
+    st === "ios-install" ? "On iPhone, add the app to the Home Screen first" :
+    st === "unsupported" ? "This browser cannot show notifications" :
+    "Get a notification on this device");
+  txt.append(title);
+  txt.append(el("div", "li-s",
+    st === "on" ? "You'll be told when a Hamra client's parcel is received at the warehouse." :
+    st === "denied" ? "Allow notifications for this site in the browser or phone settings, then come back here." :
+    st === "ios-install" ? "In Safari tap Share → Add to Home Screen, open the app from there, then turn notifications on." :
+    st === "unsupported" ? "Use Chrome on Android or a computer, or the app added to an iPhone's Home Screen." :
+    "When a Hamra client's parcel is received here instead of at Hamra, this device gets a notification, even with the app closed."));
+  card.append(txt);
+  if (st === "on" || st === "off") {
+    const b = el("button", "btn" + (st === "off" ? " pri" : ""),
+      S.pushBusy ? "Working…" : st === "on" ? "Turn off" : "Turn on notifications");
+    b.disabled = !!S.pushBusy;
+    b.onclick = st === "on" ? pushTurnOff : pushTurnOn;
+    card.append(b);
+  }
+  return card;
+}
+
+function vHamra() {
+  const v = el("section");
+  const head = el("div", "vhead");
+  const h = el("div");
+  h.append(el("h2", null, "Hamra clients"));
+  h.append(el("div", "sub", "Clients who always collect from the Hamra office. When one of their parcels is " +
+    "received at the warehouse instead, it shows here and you get a notification."));
+  head.append(h);
+  const rf = el("button", "btn sm", S.hamraBusy ? "Refreshing…" : "Refresh");
+  rf.style.marginLeft = "auto";
+  rf.disabled = !!S.hamraBusy;
+  rf.onclick = () => loadHamra();
+  head.append(rf);
+  v.append(head);
+
+  if (S.push == null) refreshPushState();
+  v.append(hamraPushCard());
+
+  const d = S.hamra;
+  if (!d) {
+    const e = el("div", "empty");
+    e.append(el("span", "spin"), el("div", null, "Loading…"));
+    v.append(e);
+    if (!S.hamraBusy) setTimeout(() => loadHamra(), 0);
+    return v;
+  }
+  const n = x => nf0.format(Number(x) || 0);
+  const busy = !!S.hamraBusy;
+
+  /* 1 — parcels waiting to go to Hamra, one row per client */
+  v.append(el("div", "sect-t home-h", "Here, not at Hamra · " + n(d.waiting_count)));
+  if (!d.waiting.length) {
+    v.append(el("div", "li-s hamra-empty", d.clients.length
+      ? "Nothing waiting. Every parcel of a Hamra client is at Hamra or already collected."
+      : "Add Hamra clients below and their parcels will show here when they arrive."));
+  } else {
+    const by = new Map();
+    for (const p of d.waiting) {
+      const g = by.get(p.client_id) || { client_id: p.client_id, customer: p.customer, parcels: [] };
+      g.parcels.push(p);
+      by.set(p.client_id, g);
+    }
+    const list = el("div", "list");
+    for (const g of by.values()) {
+      const li = el("div", "li hamra-w");
+      const mm = el("div", "li-m");
+      const nm = el("div", "li-nm");
+      nm.append(el("b", null, g.customer || "—"), el("span", "chip", g.client_id),
+        el("span", "chip s-received", n(g.parcels.length) + " parcel" + (g.parcels.length === 1 ? "" : "s")));
+      mm.append(nm);
+      const where = el("div", "hamra-where");
+      for (const p of g.parcels) {
+        const w = el("span", "hamra-pc");
+        w.append(el("span", "mono", p.barcode), copyBtn(p.barcode),
+          el("span", "li-s", " " + (p.shelf || p.zone || "not shelved") +
+            (p.received_at ? " · " + String(p.received_at).slice(0, 10) : "")));
+        where.append(w);
+      }
+      mm.append(where);
+      li.append(mm);
+      const acts = el("div", "hamra-acts");
+      const confirming = S.hamraMove === g.client_id;
+      const go = el("button", "btn sm" + (confirming ? " pri" : ""),
+        confirming ? "Confirm: send " + n(g.parcels.length) + " to Hamra" : "Send to Hamra");
+      go.disabled = busy;
+      go.onclick = async () => {
+        if (!confirming) { S.hamraMove = g.client_id; render(); return; }
+        go.disabled = true;
+        const { data: r, error } = await S.sb.rpc("bulk_move", {
+          p_barcodes: g.parcels.map(p => p.barcode), p_to: "at_branch", p_zone: "HAMRA", p_shelf: null });
+        S.hamraMove = null;
+        if (error) { toast(error.message, "bad"); render(); return; }
+        const res = (Array.isArray(r) ? r[0] : r) || {};
+        toast(n(res.moved != null ? res.moved : g.parcels.length) + " sent to Hamra", "ok");
+        S.stats = null; S.rows = null; S.zoneStats = null; S.home = null;
+        loadHamra();
+      };
+      acts.append(go);
+      if (confirming) {
+        const no = el("button", "btn sm", "Cancel");
+        no.onclick = () => { S.hamraMove = null; render(); };
+        acts.append(no);
+      }
+      li.append(acts);
+      list.append(li);
+    }
+    v.append(list);
+    if (d.waiting_count > d.waiting.length)
+      v.append(el("div", "li-s", "Showing the newest " + n(d.waiting.length) + " of " + n(d.waiting_count) + "."));
+  }
+
+  /* 2 — suggested clients */
+  const sug = d.suggestions || [];
+  if (sug.length) {
+    const sh = el("div", "sect-t home-h hamra-sh");
+    sh.append(document.createTextNode("Suggested · " + n(sug.length)));
+    const all = el("button", "btn sm", "Add all " + n(sug.length));
+    all.disabled = busy;
+    all.onclick = () => addHamraClients(sug);
+    sh.append(all);
+    v.append(sh);
+    v.append(el("div", "li-s hamra-note", "These clients' parcels went to Hamra at least twice and almost never anywhere else. " +
+      "Add the ones who are really Hamra clients; “Not Hamra” stops a client being suggested again."));
+    const list = el("div", "list");
+    for (const c of sug) {
+      const li = el("div", "li");
+      const mm = el("div", "li-m");
+      const nm = el("div", "li-nm");
+      nm.append(el("b", null, c.customer || "—"), el("span", "chip", c.client_id));
+      mm.append(nm);
+      const bits = [n(c.hamra) + " of " + n(c.out) + " sent to Hamra", "last " + (c.last || "—")];
+      if (Number(c.here)) bits.push(n(c.here) + " here now");
+      const s = el("div", "li-s", bits.join("  ·  "));
+      if (Number(c.here) > 50) s.append(el("b", "hamra-warn", "  — a big client: check before adding"));
+      mm.append(s);
+      li.append(mm);
+      const acts = el("div", "hamra-acts");
+      const add = el("button", "btn sm pri", "Add");
+      add.disabled = busy;
+      add.onclick = () => addHamraClients([c]);
+      const no = el("button", "btn sm", "Not Hamra");
+      no.disabled = busy;
+      no.onclick = async () => { if (await setHamraClient(c.client_id, c.customer, "no")) loadHamra(); };
+      acts.append(add, no);
+      li.append(acts);
+      list.append(li);
+    }
+    v.append(list);
+  }
+
+  /* 3 — the list */
+  const ch = el("div", "sect-t home-h", "Hamra clients · " + n(d.clients.length));
+  v.append(ch);
+  const addForm = el("form", "row hamra-add");
+  const inp = el("input", "inp mono");
+  inp.placeholder = "Client ID to add";
+  inp.inputMode = "numeric"; inp.autocomplete = "off";
+  const addB = el("button", "btn", "Add client");
+  addB.type = "submit";
+  addForm.append(inp, addB);
+  addForm.addEventListener("submit", async ev => {
+    ev.preventDefault();
+    const id = inp.value.trim();
+    if (!id) return;
+    addB.disabled = true;
+    const { data: p } = await S.sb.from("parcels").select("customer").eq("client_id", id).limit(1);
+    addB.disabled = false;
+    if (!p || !p.length) { toast("No parcels with client ID " + id + ".", "bad"); return; }
+    addHamraClients([{ client_id: id, customer: p[0].customer }]);
+  });
+  v.append(addForm);
+  if (!d.clients.length) {
+    v.append(el("div", "li-s hamra-empty", "No Hamra clients yet. Add them from the suggestions above or by client ID."));
+  } else {
+    const list = el("div", "list");
+    for (const c of d.clients) {
+      const li = el("div", "li");
+      const mm = el("div", "li-m");
+      const nm = el("div", "li-nm");
+      nm.append(el("b", null, c.customer || "—"), el("span", "chip", c.client_id));
+      mm.append(nm);
+      const bits = [n(c.hamra) + " sent to Hamra"];
+      if (c.last) bits.push("last " + c.last);
+      if (Number(c.here)) bits.push(n(c.here) + " here now");
+      bits.push("added " + (c.added_at || "—"));
+      mm.append(el("div", "li-s", bits.join("  ·  ")));
+      li.append(mm);
+      const rm = el("button", "btn sm", "Remove");
+      rm.disabled = busy;
+      rm.onclick = async () => {
+        if (await setHamraClient(c.client_id, c.customer, "no")) {
+          toast((c.customer || c.client_id) + " removed from Hamra clients", "ok");
+          loadHamra();
+        }
+      };
+      li.append(rm);
+      list.append(li);
+    }
+    v.append(list);
+  }
+  return v;
+}
+
 function vWaseet() {
   const v = el("section");
   const head = el("div", "vhead");
@@ -7163,6 +7503,7 @@ function render() {
              : S.tab === "sales" && canExport() ? vSales()
              : S.tab === "summary" && sees_money() ? vSummary()
              : S.tab === "waseet" && sees_money() ? vWaseet()
+             : S.tab === "hamra" && sees_money() ? vHamra()
              : S.tab === "labels" ? vLabels()
              : S.tab === "stock" ? vStock()
              : S.tab === "zones" ? vZones()
@@ -7302,12 +7643,24 @@ async function boot() {
   if (S.session) await loadMe();
   if (isCallCenter()) S.tab = "stock";
   else if (sees_money() && S.tab === "scan") S.tab = "home";
+  /* A tapped notification opens the app on its section (…/?tab=hamra). */
+  const wantTab = new URLSearchParams(location.search).get("tab");
+  if (wantTab && S.me && visibleTabs().some(t => t.id === wantTab)) {
+    S.tab = wantTab;
+    history.replaceState(null, "", location.pathname);
+  }
   render();
   if (S.me) {
     loadBrand(); loadZones();
     if (isCallCenter()) loadCallCenterStock(); else loadStats();
+    if (sees_money()) loadHamra(true);
+    if (S.tab === "hamra") refreshPushState();
   }
   if (isAdmin()) loadStaff();
+  /* Keep the Hamra count fresh while the app is open. */
+  setInterval(() => {
+    if (S.me && sees_money() && !document.hidden) loadHamra(true);
+  }, 120000);
 
   /* The handler must not call the database while the auth library is still
      inside its own callback: signing in by username (setSession) holds a lock
@@ -7331,6 +7684,7 @@ async function onAuth(evt, session) {
       S.ships = null; S.shipStats = null; S.shipQ = "";
       S.shipFilters = { mode: "", paid: "" }; S.shipSel = new Set();
       S.ccData = null; S.ccOpen = new Set(); S.ccQ = "";
+      S.hamra = null; S.hamraBusy = false; S.push = null; S.hamraMove = null;
       S.bulk = null; S.home = null; S.soData = null; S.soQ = ""; S.soStatus = ""; S.soPay = ""; S.soMonth = ""; S.soPage = 0;
       if (S.session) await loadMe();
       if (isCallCenter()) S.tab = "stock";
@@ -7340,6 +7694,7 @@ async function onAuth(evt, session) {
         loadBrand(); loadZones();
         if (isCallCenter()) loadCallCenterStock(); else loadStats();
         if (S.tab === "home") loadHome();
+        else if (sees_money()) loadHamra(true);
       }
       if (isAdmin()) loadStaff();
     }
