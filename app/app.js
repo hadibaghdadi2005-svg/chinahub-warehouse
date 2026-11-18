@@ -55,8 +55,9 @@ const STATUS = {
   at_branch: "At a branch",
   released:  "Waseet",
   delivered: "Delivered",
+  for_sale:  "For sale",
 };
-const ORDER = ["expected", "received", "shelved", "at_branch", "released", "delivered"];
+const ORDER = ["expected", "received", "shelved", "at_branch", "released", "delivered", "for_sale"];
 
 /* How money actually comes in. "Hamra office" is a place as much as a method,
    which is the point: the office needs to know where a payment was taken, not
@@ -583,7 +584,7 @@ function flyBetween(dir) {
 /* Sections, in groups: Home, then the warehouse floor, money, shipping and
    admin. The groups are what the phone's "More" sheet shows, and on a wide
    screen a thin line separates them in the row. */
-const TAB_GROUPS = { home: "", warehouse: "Warehouse", money: "Money", shipping: "Shipping", admin: "Admin" };
+const TAB_GROUPS = { home: "", warehouse: "Warehouse", money: "Money", shipping: "Shipping", sale: "Sale", admin: "Admin" };
 function visibleTabs() {
   if (isCallCenter()) return [
     { id: "stock", label: "Stock", group: "warehouse" },
@@ -604,6 +605,7 @@ function visibleTabs() {
   if (sees_money()) t.push({ id: "summary", label: "Summary", group: "money" });
   if (sees_money()) t.push({ id: "shipping", label: "Shipping", group: "shipping" });
   t.push({ id: "labels", label: "Labels", group: "shipping" });
+  if (sees_money()) t.push({ id: "sale", label: "Sale stock", group: "sale" });
   if (sees_money()) t.push({ id: "setup", label: "Setup", group: "admin" });
   if (isAdmin()) t.push({ id: "staff", label: "Staff", group: "admin" });
   return t;
@@ -641,6 +643,7 @@ function goTab(id) {
   }
   if (id === "zones" && !S.zoneStats) loadZoneStats();
   if (id === "hamra") { loadHamra(); refreshPushState(); }
+  if (id === "sale") loadSale();
   /* Always fresh: a payment taken elsewhere must show here straight away. */
   if (id === "sales") { loadSales(); if (!S.stats) loadStats(); if (!S.money) loadMoney(); }
   if (id === "money") {
@@ -4828,6 +4831,524 @@ function exportSummary() {
 }
 
 /* ------------------------------------------------------------- waseet --- */
+/* ---------------------------------------------------------- sale stock --- */
+/* Parcels clients did not want, sold by the kilo. Scanning a parcel in moves
+   it to status "for_sale" (sale_add) and opens it for a photo, an English
+   name, a category and a price. Price = weight × the category's $/kg, unless
+   an item has its own price. */
+const SALE_BUCKET = "sale-photos";
+const nf1 = new Intl.NumberFormat("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 3 });
+
+async function loadSale() {
+  if (S.saleBusy) return;
+  S.saleBusy = true; render();
+  const [it, ct] = await Promise.all([
+    S.sb.from("sale_items").select("*").order("added_at", { ascending: false }).limit(5000),
+    S.sb.from("sale_categories").select("*").order("sort").order("name"),
+  ]);
+  S.saleBusy = false;
+  if (it.error || ct.error) { toast("Could not load sale stock — " + (it.error || ct.error).message, "bad"); render(); return; }
+  S.sale = { items: it.data || [], cats: ct.data || [] };
+  render();
+}
+
+const saleCat = id => (S.sale && S.sale.cats.find(c => c.id === id)) || null;
+function salePrice(it) {
+  if (it.price_override != null && it.price_override !== "") return Number(it.price_override);
+  const c = saleCat(it.category_id);
+  if (!c) return null;
+  return Math.round(Number(it.weight_kg || 0) * Number(c.rate_per_kg || 0) * 100) / 100;
+}
+const salePhoto = path => path ? S.sb.storage.from(SALE_BUCKET).getPublicUrl(path).data.publicUrl : "";
+/* Taobao names often repeat themselves after a comma: "A,A-shortened". */
+function cleanCn(s) {
+  s = String(s || "").trim();
+  const i = s.indexOf(",");
+  if (i > 0) {
+    const a = s.slice(0, i), b = s.slice(i + 1);
+    if (b && a.startsWith(b.slice(0, Math.min(b.length, 8)))) return a;
+  }
+  return s;
+}
+function saleUpsertLocal(row) {
+  if (!S.sale) return;
+  const i = S.sale.items.findIndex(x => x.id === row.id);
+  if (i >= 0) S.sale.items[i] = row; else S.sale.items.unshift(row);
+}
+
+async function saleTranslate(it) {
+  const cn = cleanCn(it.name_cn);
+  if (!cn) return null;
+  const r = await callFn("translate", { texts: [cn] });
+  if (!r.ok) { toast("Translation failed — " + r.error, "bad"); return null; }
+  const en = (r.data && r.data.en && r.data.en[0]) || "";
+  return en ? en.charAt(0).toUpperCase() + en.slice(1) : null;
+}
+
+async function saleScan(code) {
+  code = normBc(code || "");
+  if (!code) return;
+  S.saleScanBusy = true; render();
+  const { data, error } = await S.sb.rpc("sale_add", { p_barcode: code });
+  S.saleScanBusy = false;
+  if (error) {
+    const m = /ALREADY:(\d+)/.exec(error.message || "");
+    if (m) {
+      if (!S.sale) await loadSale();
+      const it = S.sale && S.sale.items.find(x => x.id === Number(m[1]));
+      toast("Already in sale stock", "ok");
+      render();
+      if (it) openSaleItem(it);
+      return;
+    }
+    ping(false);
+    toast(error.message, "bad"); render();
+    return;
+  }
+  ping(true);
+  const row = Array.isArray(data) ? data[0] : data;
+  if (!S.sale) await loadSale(); else saleUpsertLocal(row);
+  render();
+  openSaleItem(row, { fresh: true });
+}
+
+/* Phone photos are large; a 1280px JPEG is plenty for a product picture. */
+async function shrinkPhoto(file) {
+  const bmp = await createImageBitmap(file);
+  const k = Math.min(1, 1280 / Math.max(bmp.width, bmp.height));
+  const c = document.createElement("canvas");
+  c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+  c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+  return await new Promise(res => c.toBlob(res, "image/jpeg", 0.82));
+}
+
+function openSaleItem(it0, opts = {}) {
+  document.querySelector(".sale-ed")?.remove();
+  let it = { ...it0 };
+  const scrim = el("div", "scrim sale-ed");
+  const m = el("div", "modal sale-m");
+  const close = () => { scrim.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = e => { if (e.key === "Escape") close(); };
+  document.addEventListener("keydown", onKey);
+
+  const head = el("div", "sale-m-h");
+  const ht = el("div");
+  ht.append(el("h3", null, opts.fresh ? "Added to sale stock" : "Sale item"));
+  const sub = el("div", "li-s");
+  sub.append(el("span", "mono", it.barcode), copyBtn(it.barcode));
+  if (it.customer || it.client_id) sub.append(document.createTextNode("  ·  was " + (it.customer || "") + (it.client_id ? " (" + it.client_id + ")" : "")));
+  ht.append(sub);
+  head.append(ht);
+  const x = el("button", "btn sm", "Close");
+  x.type = "button"; x.onclick = close;
+  head.append(x);
+  m.append(head);
+
+  /* photo */
+  const ph = el("div", "sale-ph");
+  const drawPhoto = () => {
+    ph.replaceChildren();
+    if (it.photo_path) {
+      const img = el("img");
+      img.src = salePhoto(it.photo_path); img.alt = it.name_en || "Item photo";
+      ph.append(img);
+    } else ph.append(el("div", "sale-ph-none", "No photo yet"));
+  };
+  drawPhoto();
+  m.append(ph);
+  const phBtns = el("div", "row sale-ph-b");
+  const pick = (label, capture) => {
+    const lab = el("label", "btn" + (capture ? " pri" : ""));
+    const inp = el("input");
+    inp.type = "file"; inp.accept = "image/*"; inp.hidden = true;
+    if (capture) inp.setAttribute("capture", "environment");
+    inp.onchange = async () => {
+      const f = inp.files && inp.files[0];
+      if (!f) return;
+      lab.firstChild.textContent = "Uploading…";
+      try {
+        const blob = await shrinkPhoto(f);
+        const path = it.id + "/" + Date.now() + ".jpg";
+        const up = await S.sb.storage.from(SALE_BUCKET).upload(path, blob, { contentType: "image/jpeg" });
+        if (up.error) throw up.error;
+        const old = it.photo_path;
+        const { data, error } = await S.sb.from("sale_items").update({ photo_path: path }).eq("id", it.id).select().single();
+        if (error) throw error;
+        if (old) S.sb.storage.from(SALE_BUCKET).remove([old]).catch(() => {});
+        it = { ...it, photo_path: data.photo_path };
+        saleUpsertLocal(data); drawPhoto(); render();
+        toast("Photo saved", "ok");
+      } catch (e) {
+        toast("Photo not saved — " + String(e && e.message || e), "bad");
+      }
+      lab.firstChild.textContent = label;
+      inp.value = "";
+    };
+    lab.append(document.createTextNode(label), inp);
+    return lab;
+  };
+  phBtns.append(pick("Take photo", true), pick("Choose a picture", false));
+  m.append(phBtns);
+
+  /* fields */
+  const form = el("form", "sale-f");
+  const field = (label, input, hint) => {
+    const f = el("label", "field");
+    f.append(el("span", null, label), input);
+    if (hint) f.append(el("div", "sub2", hint));
+    form.append(f);
+    return f;
+  };
+  const en = el("input", "inp");
+  en.value = it.name_en || ""; en.placeholder = "English name";
+  const enF = field("Name", en);
+  const tr = el("button", "btn sm", "Translate again");
+  tr.type = "button";
+  tr.onclick = async () => { tr.disabled = true; tr.textContent = "Translating…"; const t = await saleTranslate(it); if (t) en.value = t; tr.disabled = false; tr.textContent = "Translate again"; recalc(); };
+  enF.append(tr);
+  if (it.name_cn) enF.append(el("div", "sub2 sale-cn", cleanCn(it.name_cn)));
+
+  const g = el("div", "sale-g");
+  form.append(g);
+  const wt = el("input", "inp");
+  wt.type = "number"; wt.step = "0.001"; wt.min = "0"; wt.inputMode = "decimal";
+  wt.value = it.weight_kg != null ? String(Number(it.weight_kg)) : "";
+  const wf = el("label", "field");
+  wf.append(el("span", null, "Weight (kg)"), wt, el("div", "sub2", "From ChinaHub's weight. Change it if you weigh it."));
+  g.append(wf);
+  const cs = el("select", "inp");
+  cs.append(new Option("— choose —", ""));
+  for (const c of S.sale ? S.sale.cats : []) cs.append(new Option(c.name + " · " + money(c.rate_per_kg) + "/kg", String(c.id)));
+  cs.value = it.category_id ? String(it.category_id) : "";
+  const cf = el("label", "field");
+  cf.append(el("span", null, "Category"), cs);
+  if (!S.sale || !S.sale.cats.length) cf.append(el("div", "sub2", "Add categories and their $/kg in the Categories tab."));
+  g.append(cf);
+  const po = el("input", "inp");
+  po.type = "number"; po.step = "0.01"; po.min = "0"; po.inputMode = "decimal";
+  po.value = it.price_override != null ? String(Number(it.price_override)) : "";
+  const pf = el("label", "field");
+  const pHint = el("div", "sub2");
+  pf.append(el("span", null, "Own price ($)"), po, pHint);
+  g.append(pf);
+  const sp = el("input", "inp");
+  sp.value = it.spot || ""; sp.placeholder = "e.g. SALE-01";
+  const sf = el("label", "field");
+  sf.append(el("span", null, "Kept at"), sp);
+  g.append(sf);
+  const nt = el("input", "inp");
+  nt.value = it.note || ""; nt.placeholder = "Condition, colour, size…";
+  field("Note", nt);
+
+  const priceBox = el("div", "sale-price");
+  form.append(priceBox);
+  const draft = () => ({
+    name_en: en.value.trim() || null,
+    weight_kg: Math.max(0, Number(wt.value) || 0),
+    category_id: cs.value ? Number(cs.value) : null,
+    price_override: po.value === "" ? null : Math.max(0, Number(po.value) || 0),
+    spot: sp.value.trim() || null,
+    note: nt.value.trim() || null,
+  });
+  const recalc = () => {
+    const d = draft();
+    const c = saleCat(d.category_id);
+    const byKg = c ? Math.round(d.weight_kg * Number(c.rate_per_kg) * 100) / 100 : null;
+    pHint.textContent = byKg != null ? "Leave empty to use " + money(byKg) + " (" + nf1.format(d.weight_kg) + " kg × " + money(c.rate_per_kg) + ")" : "Leave empty to price by weight.";
+    const p = d.price_override != null ? d.price_override : byKg;
+    priceBox.replaceChildren(el("span", "li-s", "Price"), el("b", null, p != null ? money(p) : "—"));
+  };
+  [en, wt, cs, po].forEach(i => i.addEventListener("input", recalc));
+  recalc();
+
+  const acts = el("div", "row sale-acts");
+  const save = el("button", "btn pri", "Save");
+  save.type = "submit";
+  acts.append(save);
+  form.append(acts);
+  form.addEventListener("submit", async ev => {
+    ev.preventDefault();
+    save.disabled = true;
+    const { data, error } = await S.sb.from("sale_items").update(draft()).eq("id", it.id).select().single();
+    save.disabled = false;
+    if (error) { toast(error.message, "bad"); return; }
+    it = data; saleUpsertLocal(data); render();
+    toast("Saved", "ok");
+    close();
+  });
+  m.append(form);
+
+  /* sell / take out */
+  const more = el("div", "sale-more");
+  if (it.status === "sold") {
+    more.append(el("div", "li-s", "Sold " + fmtDate(it.sold_at) + " for " + money(it.sold_price)));
+    const un = el("button", "btn sm", "Undo sale");
+    un.onclick = async () => {
+      const { data, error } = await S.sb.rpc("sale_sell", { p_id: it.id, p_price: null });
+      if (error) { toast(error.message, "bad"); return; }
+      saleUpsertLocal(Array.isArray(data) ? data[0] : data); render(); close();
+      toast("Back in stock", "ok");
+    };
+    more.append(un);
+  } else {
+    const sell = el("button", "btn ok-b", "Sell…");
+    sell.type = "button";
+    sell.onclick = () => {
+      const p = salePrice({ ...it, ...draft() });
+      const box = el("div", "row sale-sell");
+      const amt = el("input", "inp");
+      amt.type = "number"; amt.step = "0.01"; amt.min = "0"; amt.inputMode = "decimal";
+      amt.value = p != null ? String(p) : "";
+      amt.placeholder = "Sold for $";
+      const go = el("button", "btn pri", "Confirm sale");
+      go.onclick = async () => {
+        if (amt.value === "") { toast("Enter the price it sold for.", "bad"); return; }
+        go.disabled = true;
+        await S.sb.from("sale_items").update(draft()).eq("id", it.id);
+        const { data, error } = await S.sb.rpc("sale_sell", { p_id: it.id, p_price: Number(amt.value) });
+        go.disabled = false;
+        if (error) { toast(error.message, "bad"); return; }
+        saleUpsertLocal(Array.isArray(data) ? data[0] : data); render(); close();
+        toast("Sold for " + money(amt.value), "ok");
+      };
+      box.append(amt, go);
+      sell.replaceWith(box);
+      amt.focus();
+    };
+    more.append(sell);
+    const out = el("button", "btn sm danger-b", "Take out of sale stock");
+    out.type = "button";
+    let armed = false;
+    out.onclick = async () => {
+      if (!armed) {
+        armed = true;
+        out.textContent = "Confirm: put back as " + (STATUS[it.prev_status] || "in the warehouse");
+        return;
+      }
+      out.disabled = true;
+      const { data, error } = await S.sb.rpc("sale_undo", { p_id: it.id });
+      if (error) { toast(error.message, "bad"); out.disabled = false; return; }
+      if (data) S.sb.storage.from(SALE_BUCKET).remove([data]).catch(() => {});
+      if (S.sale) S.sale.items = S.sale.items.filter(x => x.id !== it.id);
+      S.stats = null; S.rows = null;
+      render(); close();
+      toast("Put back in the warehouse", "ok");
+    };
+    more.append(out);
+  }
+  m.append(more);
+
+  scrim.append(m);
+  scrim.addEventListener("click", e => { if (e.target === scrim) close(); });
+  document.body.append(scrim);
+
+  /* A fresh item gets its English name straight away. */
+  if (!it.name_en && it.name_cn) {
+    en.placeholder = "Translating…";
+    saleTranslate(it).then(async t => {
+      en.placeholder = "English name";
+      if (!t || en.value.trim()) return;
+      en.value = t; recalc();
+      const { data } = await S.sb.from("sale_items").update({ name_en: t }).eq("id", it.id).select().single();
+      if (data) { it = { ...it, name_en: data.name_en }; saleUpsertLocal(data); render(); }
+    });
+  }
+}
+
+function vSale() {
+  const v = el("section");
+  const head = el("div", "vhead");
+  const h = el("div");
+  h.append(el("h2", null, "Sale stock"));
+  h.append(el("div", "sub", "Parcels clients did not want, sold by the kilo. Scan a parcel to add it."));
+  head.append(h);
+  const rf = el("button", "btn sm", S.saleBusy ? "Refreshing…" : "Refresh");
+  rf.style.marginLeft = "auto";
+  rf.disabled = !!S.saleBusy;
+  rf.onclick = loadSale;
+  head.append(rf);
+  v.append(head);
+
+  /* scan box */
+  const sc = el("form", "row sale-scan");
+  const si = el("input", "inp mono");
+  si.placeholder = "Scan or type the tracking number";
+  si.autocomplete = "off"; si.autocapitalize = "off"; si.spellcheck = false;
+  si.enterKeyHint = "go";
+  si.dataset.keep = "sale-scan";
+  const sb = el("button", "btn pri", S.saleScanBusy ? "Adding…" : "Add to sale stock");
+  sb.type = "submit"; sb.disabled = !!S.saleScanBusy;
+  sc.append(si, sb);
+  sc.addEventListener("submit", ev => { ev.preventDefault(); const c = si.value; si.value = ""; saleScan(c); });
+  v.append(sc);
+  /* With a handheld scanner (a computer), keep the box ready for the next
+     scan. On a phone this would pop the keyboard up on every redraw. */
+  if (matchMedia("(pointer: fine)").matches && !document.querySelector(".sale-ed"))
+    setTimeout(() => {
+      const e = document.querySelector('[data-keep="sale-scan"]');
+      const a = document.activeElement;
+      if (e && !(a && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName))) e.focus();
+    }, 0);
+
+  const d = S.sale;
+  if (!d) {
+    const e = el("div", "empty");
+    e.append(el("span", "spin"), el("div", null, "Loading…"));
+    v.append(e);
+    if (!S.saleBusy) setTimeout(loadSale, 0);
+    return v;
+  }
+  const stock = d.items.filter(x => x.status === "in_stock");
+  const sold = d.items.filter(x => x.status === "sold");
+  const kg = stock.reduce((a, x) => a + Number(x.weight_kg || 0), 0);
+  const value = stock.reduce((a, x) => a + (salePrice(x) || 0), 0);
+  const unpriced = stock.filter(x => salePrice(x) == null).length;
+  const noPhoto = stock.filter(x => !x.photo_path).length;
+  const month = new Date().toISOString().slice(0, 7);
+  const soldMonth = sold.filter(x => String(x.sold_at || "").slice(0, 7) === month);
+
+  const tiles = el("div", "tiles");
+  const tile = (k, val, note, colour, go) => {
+    const b = el(go ? "button" : "div", "tile");
+    b.append(el("div", "k", k));
+    const vv = el("div", "v", val);
+    if (colour) vv.style.color = colour;
+    b.append(vv);
+    if (note) b.append(el("div", "n", note));
+    if (go) b.onclick = go;
+    return b;
+  };
+  tiles.append(
+    tile("In stock", nf0.format(stock.length), nf1.format(kg) + " kg", null, () => { S.saleView = "stock"; render(); }),
+    tile("Stock value", money(value), unpriced ? nf0.format(unpriced) + " not priced yet" : "at today's rates", "var(--ok)"),
+    tile("Sold this month", money(soldMonth.reduce((a, x) => a + Number(x.sold_price || 0), 0)),
+      nf0.format(soldMonth.length) + " items", null, () => { S.saleView = "sold"; render(); }),
+    tile("Need a photo", nf0.format(noPhoto), "in stock without a picture", noPhoto ? "var(--warn)" : null),
+  );
+  v.append(tiles);
+
+  const tabs = el("div", "lbl-tabs sale-tabs");
+  for (const [id, label] of [["stock", "In stock · " + nf0.format(stock.length)], ["sold", "Sold · " + nf0.format(sold.length)], ["cats", "Categories · " + nf0.format(d.cats.length)]]) {
+    const b = el("button", "lbl-tab" + (S.saleView === id ? " on" : ""), label);
+    b.type = "button";
+    b.onclick = () => { S.saleView = id; render(); };
+    tabs.append(b);
+  }
+  v.append(tabs);
+
+  if (S.saleView === "cats") { v.append(saleCatsView()); return v; }
+
+  /* filters */
+  const fb = el("div", "row sale-fb");
+  const q = el("input", "inp");
+  q.type = "search";
+  q.placeholder = "Search name, number or place";
+  q.value = S.saleQ || "";
+  const cf = el("select", "inp");
+  cf.append(new Option("All categories", ""), new Option("No category", "none"));
+  for (const c of d.cats) cf.append(new Option(c.name, String(c.id)));
+  cf.value = S.saleCat || "";
+  cf.onchange = () => { S.saleCat = cf.value; render(); };
+  fb.append(q, cf);
+  v.append(fb);
+
+  let rows = S.saleView === "sold" ? sold : stock;
+  if (S.saleCat === "none") rows = rows.filter(x => !x.category_id);
+  else if (S.saleCat) rows = rows.filter(x => String(x.category_id) === S.saleCat);
+
+  if (!rows.length) {
+    const e = el("div", "empty");
+    e.append(el("b", null, S.saleView === "sold" ? "Nothing sold yet" : d.items.length ? "Nothing matches" : "Sale stock is empty"));
+    if (!d.items.length) e.append(document.createTextNode("Scan a parcel above to add it."));
+    v.append(e);
+    return v;
+  }
+  const grid = el("div", "sale-grid");
+  const noHit = el("div", "empty");
+  noHit.append(el("b", null, "Nothing matches"));
+  noHit.hidden = true;
+  /* Typing filters the cards in place, so the box keeps its focus. */
+  const filter = () => {
+    S.saleQ = q.value;
+    const t = q.value.trim().toLowerCase();
+    let shown = 0;
+    for (const c of grid.children) { const hit = !t || c.dataset.s.includes(t); c.hidden = !hit; if (hit) shown++; }
+    noHit.hidden = shown > 0;
+  };
+  q.addEventListener("input", filter);
+  for (const it of rows.slice(0, 2000)) {
+    const c = el("button", "sale-card");
+    c.type = "button";
+    c.dataset.s = [it.name_en, it.name_cn, it.barcode, it.spot, it.note].map(s => String(s || "").toLowerCase()).join(" ");
+    const pic = el("div", "sale-card-ph");
+    if (it.photo_path) { const img = el("img"); img.loading = "lazy"; img.src = salePhoto(it.photo_path); img.alt = ""; pic.append(img); }
+    else pic.append(el("span", "li-s", "No photo"));
+    c.append(pic);
+    const b = el("div", "sale-card-b");
+    b.append(el("div", "sale-card-n", it.name_en || cleanCn(it.name_cn) || it.barcode));
+    const cat = saleCat(it.category_id);
+    const meta = el("div", "sale-card-m");
+    meta.append(el("span", null, nf1.format(Number(it.weight_kg || 0)) + " kg"));
+    if (cat) meta.append(el("span", "chip", cat.name));
+    if (it.spot) meta.append(el("span", "chip", it.spot));
+    b.append(meta);
+    const p = it.status === "sold" ? Number(it.sold_price) : salePrice(it);
+    b.append(el("div", "sale-card-p", p != null ? money(p) : "No price"));
+    if (it.status === "sold") b.append(el("div", "li-s", "Sold " + fmtDate(it.sold_at)));
+    c.append(b);
+    c.onclick = () => openSaleItem(it);
+    grid.append(c);
+  }
+  v.append(grid, noHit);
+  filter();
+  if (rows.length > 2000) v.append(el("div", "li-s", "Showing the newest 2,000 of " + nf0.format(rows.length) + "."));
+  return v;
+}
+
+function saleCatsView() {
+  const box = el("div", "card pad sale-cats");
+  box.append(el("div", "sub2", "Each item's price is its weight × its category's rate. Changing a rate re-prices every unsold item in that category."));
+  const list = el("div", "sale-cat-list");
+  const used = id => S.sale.items.filter(x => x.category_id === id && x.status === "in_stock").length;
+  const row = c => {
+    const r = el("form", "row sale-cat");
+    const nm = el("input", "inp"); nm.value = c ? c.name : ""; nm.placeholder = "Category name"; nm.required = true;
+    const rt = el("input", "inp"); rt.type = "number"; rt.step = "0.01"; rt.min = "0"; rt.inputMode = "decimal";
+    rt.value = c ? String(Number(c.rate_per_kg)) : ""; rt.placeholder = "$ per kg"; rt.required = true;
+    const sv = el("button", "btn sm" + (c ? "" : " pri"), c ? "Save" : "Add");
+    sv.type = "submit";
+    r.append(nm, el("span", "li-s", "$/kg"), rt, sv);
+    if (c) {
+      r.append(el("span", "li-s", nf0.format(used(c.id)) + " items"));
+      const del = el("button", "btn sm", "Delete");
+      del.type = "button";
+      let armed = false;
+      del.onclick = async () => {
+        if (!armed) { armed = true; del.textContent = "Confirm delete"; return; }
+        const { error } = await S.sb.from("sale_categories").delete().eq("id", c.id);
+        if (error) { toast(error.message, "bad"); return; }
+        toast(c.name + " deleted. Its items now have no category.", "ok");
+        loadSale();
+      };
+      r.append(del);
+    }
+    r.addEventListener("submit", async ev => {
+      ev.preventDefault();
+      const rec = { name: nm.value.trim(), rate_per_kg: Math.max(0, Number(rt.value) || 0) };
+      const q = c ? S.sb.from("sale_categories").update(rec).eq("id", c.id) : S.sb.from("sale_categories").insert(rec);
+      const { error } = await q;
+      if (error) { toast(/duplicate/.test(error.message) ? "There is already a category called " + rec.name : error.message, "bad"); return; }
+      toast(c ? "Saved" : rec.name + " added", "ok");
+      loadSale();
+    });
+    return r;
+  };
+  for (const c of S.sale.cats) list.append(row(c));
+  list.append(row(null));
+  box.append(list);
+  return box;
+}
+
 /* ------------------------------------------------------- hamra clients --- */
 /* Clients who always collect from the Hamra office. When one of their parcels
    is received at the warehouse instead, it shows here and every phone that
@@ -7504,6 +8025,7 @@ function render() {
              : S.tab === "summary" && sees_money() ? vSummary()
              : S.tab === "waseet" && sees_money() ? vWaseet()
              : S.tab === "hamra" && sees_money() ? vHamra()
+             : S.tab === "sale" && sees_money() ? vSale()
              : S.tab === "labels" ? vLabels()
              : S.tab === "stock" ? vStock()
              : S.tab === "zones" ? vZones()
@@ -7685,6 +8207,7 @@ async function onAuth(evt, session) {
       S.shipFilters = { mode: "", paid: "" }; S.shipSel = new Set();
       S.ccData = null; S.ccOpen = new Set(); S.ccQ = "";
       S.hamra = null; S.hamraBusy = false; S.push = null; S.hamraMove = null;
+      S.sale = null; S.saleBusy = false; S.saleQ = ""; S.saleCat = ""; S.saleView = "stock";
       S.bulk = null; S.home = null; S.soData = null; S.soQ = ""; S.soStatus = ""; S.soPay = ""; S.soMonth = ""; S.soPage = 0;
       if (S.session) await loadMe();
       if (isCallCenter()) S.tab = "stock";
