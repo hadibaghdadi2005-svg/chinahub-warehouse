@@ -5013,9 +5013,15 @@ function openSaleItem(it0, opts = {}) {
   const wt = el("input", "inp");
   wt.type = "number"; wt.step = "0.001"; wt.min = "0"; wt.inputMode = "decimal";
   wt.value = it.weight_kg != null ? String(Number(it.weight_kg)) : "";
+  const qy = el("input", "inp");
+  qy.type = "number"; qy.step = "1"; qy.min = "0"; qy.inputMode = "numeric";
+  qy.value = it.qty != null ? String(it.qty) : "";
+  qy.placeholder = "pieces";
+  const qf = el("label", "field");
+  qf.append(el("span", null, "Quantity (pieces)"), qy, el("div", "sub2", "From ChinaHub's item count. Change it if you count them."));
   const wf = el("label", "field");
   wf.append(el("span", null, "Weight (kg)"), wt, el("div", "sub2", "From ChinaHub's weight. Change it if you weigh it."));
-  g.append(wf);
+  g.append(wf, qf);
   const cs = el("select", "inp");
   cs.append(new Option("— choose —", ""));
   for (const c of S.sale ? S.sale.cats : []) cs.append(new Option(c.name + " · " + money(c.rate_per_kg) + "/kg", String(c.id)));
@@ -5045,6 +5051,7 @@ function openSaleItem(it0, opts = {}) {
   const draft = () => ({
     name_en: en.value.trim() || null,
     weight_kg: Math.max(0, Number(wt.value) || 0),
+    qty: qy.value === "" ? null : Math.max(0, Math.round(Number(qy.value) || 0)),
     category_id: cs.value ? Number(cs.value) : null,
     price_override: po.value === "" ? null : Math.max(0, Number(po.value) || 0),
     spot: sp.value.trim() || null,
@@ -5511,7 +5518,8 @@ function vSale() {
     return b;
   };
   tiles.append(
-    tile("In stock", nf0.format(stock.length), nf1.format(kg) + " kg", null, () => { S.saleView = "stock"; render(); }),
+    tile("In stock", nf0.format(stock.length), nf1.format(kg) + " kg · " +
+      nf0.format(stock.reduce((a, x) => a + (Number(x.qty) || 0), 0)) + " pcs", null, () => { S.saleView = "stock"; render(); }),
     tile("Stock value", money(value), unpriced ? nf0.format(unpriced) + " not priced yet" : "at today's rates", "var(--ok)"),
     tile("Sold this month", money(soldMonth.reduce((a, x) => a + Number(x.sold_price || 0), 0)),
       nf0.format(soldMonth.length) + " items", null, () => { S.saleView = "sold"; render(); }),
@@ -5581,6 +5589,7 @@ function vSale() {
     const cat = saleCat(it.category_id);
     const meta = el("div", "sale-card-m");
     meta.append(el("span", null, nf1.format(Number(it.weight_kg || 0)) + " kg"));
+    if (Number(it.qty)) meta.append(el("span", null, nf0.format(it.qty) + " pcs"));
     if (cat) meta.append(el("span", "chip", cat.name));
     if (it.spot) meta.append(el("span", "chip", it.spot));
     b.append(meta);

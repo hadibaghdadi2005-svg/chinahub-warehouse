@@ -236,3 +236,9 @@ begin
                             'unknown', to_jsonb(unknown), 'created', to_jsonb(created), 'refused', refused);
 end $$;
 grant execute on function sale_add_many(jsonb, boolean) to authenticated;
+
+-- Quantity (pieces) per sale item, copied from the parcel when it is added
+-- and editable after. sale_add copies it from now on.
+alter table sale_items add column if not exists qty int check (qty is null or qty >= 0);
+update sale_items s set qty = nullif(p.qty, 0) from parcels p where p.barcode = s.barcode and s.qty is null;
+-- (sale_add re-created with qty: insert ... qty = nullif(p.qty, 0) ...; see the live function.)
