@@ -36,6 +36,7 @@ header .sp{margin-left:auto;display:flex;gap:6px}
   font-size:13px;font-weight:600;
 }
 .mini:active{background:var(--line)}
+.mini.on{background:var(--fg);color:var(--bg);border-color:var(--fg)}
 
 .shelf{
   flex:none;padding:12px 14px;background:var(--surface-2);border-bottom:1px solid var(--line);
@@ -111,6 +112,7 @@ textarea{
 <header>
   <h1>Shelf Scanner</h1>
   <div class="sp">
+    <button class="mini" id="noShelfBtn" type="button">No shelf</button>
     <button class="mini" id="exportBtn" type="button">Export</button>
     <button class="mini" id="helpBtn" type="button">Help</button>
   </div>
@@ -163,6 +165,7 @@ textarea{
     <p><b>1.</b> Scan a shelf barcode. It appears at the top as the current shelf.</p>
     <p><b>2.</b> Scan every parcel on that shelf. Each one is recorded against it.</p>
     <p><b>3.</b> Scan the next shelf barcode and carry on.</p>
+    <p><b>Parcels only, no shelf</b> (for example for Sale stock): press <b>No shelf</b>, then scan the parcels. They are recorded with no shelf. Scanning any shelf barcode, or pressing the button again, goes back to shelves.</p>
     <p>Short codes are treated as shelves or zones (ZONE-SHIP, C-01-02…), long mostly-numeric codes as parcels. Shipping-client labels (SHIP-123) count as goods: scan a zone or shelf first, then the SHIP labels in it. If a code is scanned twice it is counted once and flagged as a repeat.</p>
     <p>Everything is stored on this device, so you can close the page and come back. Nothing is sent anywhere.</p>
     <p>When finished, press <b>Export</b>, then <b>Copy all</b>, and paste it into the warehouse app under Setup &rarr; Import. Set "These rows are" to <b>Already on shelves</b>.</p>
@@ -233,11 +236,12 @@ function handle(raw){
 
   if(!isParcel(code)){
     state.shelf = code.replace(/\//g,"-");
+    state.noShelf = false;
     state.rows.unshift({ k:"s", code:state.shelf, t:Date.now() });
     beep("shelf"); save(); render();
     return;
   }
-  if(!state.shelf){
+  if(!state.shelf && !state.noShelf){
     state.rows.unshift({ k:"e", code, t:Date.now(), note:"Scan a shelf barcode first" });
     beep("bad"); save(); render();
     return;
@@ -246,8 +250,9 @@ function handle(raw){
   if(already){
     state.dupes++;
     state.rows.unshift({ k:"w", code, t:Date.now(),
-      note: already.shelf === state.shelf ? "Already scanned on this shelf"
-                                          : "Already scanned on " + already.shelf });
+      note: already.shelf === state.shelf ? (state.shelf ? "Already scanned on this shelf" : "Already scanned")
+                                          : already.shelf ? "Already scanned on " + already.shelf
+                                                          : "Already scanned with no shelf" });
     beep("bad"); save(); render();
     return;
   }
@@ -257,13 +262,24 @@ function handle(raw){
 
 function render(){
   const parcels = state.rows.filter(r => r.k === "p");
-  const shelves = new Set(parcels.map(r => r.shelf));
+  const shelves = new Set(parcels.map(r => r.shelf).filter(Boolean));
   $("#nParcels").textContent = parcels.length;
   $("#nShelves").textContent = shelves.size;
   $("#nDupes").textContent = state.dupes;
 
+  const nsb = $("#noShelfBtn");
+  nsb.textContent = state.noShelf ? "Shelves" : "No shelf";
+  nsb.classList.toggle("on", !!state.noShelf);
+  $("#hint").textContent = state.noShelf
+    ? "Scan parcels only — they are saved with no shelf. Scan a shelf barcode or press Shelves to go back."
+    : "Scan a shelf barcode, then scan the parcels on it. Everything is saved on this device.";
   const bar = $("#shelfBar");
-  if(state.shelf){
+  if(state.noShelf){
+    bar.classList.remove("none");
+    $("#shelfVal").textContent = "No shelf";
+    const n = parcels.filter(r => !r.shelf).length;
+    $("#shelfCount").textContent = "Parcels only · " + n + (n === 1 ? " parcel" : " parcels") + " with no shelf";
+  }else if(state.shelf){
     bar.classList.remove("none");
     $("#shelfVal").textContent = state.shelf;
     const n = parcels.filter(r => r.shelf === state.shelf).length;
@@ -292,14 +308,15 @@ function render(){
     row.className = "row " + r.k;
     const ic = document.createElement("div");
     ic.className = "ic";
-    ic.textContent = r.k === "p" ? "✓" : r.k === "s" ? "▤" : r.k === "w" ? "!" : "✕";
+    ic.textContent = r.k === "p" ? "✓" : r.k === "s" || r.k === "n" ? "▤" : r.k === "w" ? "!" : "✕";
     const bd = document.createElement("div");
     bd.className = "bd";
     const b = document.createElement("b");
     b.textContent = r.code;
     const sp = document.createElement("span");
-    sp.textContent = r.k === "p" ? (isShipLabel(r.code) ? "shipping client · on " : "on ") + r.shelf
+    sp.textContent = r.k === "p" ? (r.shelf ? (isShipLabel(r.code) ? "shipping client · on " : "on ") + r.shelf : "no shelf")
                    : r.k === "s" ? "shelf set"
+                   : r.k === "n" ? "no shelf: parcels only"
                    : r.note || "";
     bd.appendChild(b); bd.appendChild(sp);
     const tm = document.createElement("time");
@@ -335,15 +352,29 @@ document.addEventListener("click", e => {
 });
 window.addEventListener("pageshow", refocus);
 
+/* Parcels only: everything scanned next is recorded with no shelf. */
+$("#noShelfBtn").addEventListener("click", () => {
+  state.noShelf = !state.noShelf;
+  if(state.noShelf){
+    state.shelf = "";
+    state.rows.unshift({ k:"n", code:"NO SHELF", t:Date.now() });
+    beep("shelf");
+  }
+  save(); render(); refocus();
+});
+
 $("#helpBtn").addEventListener("click", () => $("#helpDlg").showModal());
 $("#closeHelp").addEventListener("click", () => { $("#helpDlg").close(); refocus(); });
 
 $("#exportBtn").addEventListener("click", () => {
   const parcels = state.rows.filter(r => r.k === "p");
-  $("#exportNote").textContent = parcels.length
-    ? parcels.length + " parcels across " + new Set(parcels.map(r => r.shelf)).size +
-      " shelves. Copy this and paste it into the warehouse app under Setup → Import."
-    : "Nothing scanned yet.";
+  const loose = parcels.filter(r => !r.shelf).length;
+  const onShelves = parcels.length - loose;
+  $("#exportNote").textContent = !parcels.length ? "Nothing scanned yet."
+    : !onShelves ? parcels.length + " parcels with no shelf. Paste this into the warehouse app under Sale stock → Import from PDA."
+    : parcels.length + " parcels across " + new Set(parcels.map(r => r.shelf).filter(Boolean)).size + " shelves" +
+      (loose ? " (" + loose + " with no shelf)" : "") +
+      ". For shelves, paste this into Setup → Import; for sale items, into Sale stock → Import from PDA.";
   $("#csv").value = csv();
   $("#exportDlg").showModal();
 });
