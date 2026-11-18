@@ -192,3 +192,47 @@ begin
                             'unknown', to_jsonb(unknown), 'refused', refused);
 end $$;
 grant execute on function sale_add_many(jsonb) to authenticated;
+
+-- Later: sale_add_many can also add numbers the app has never seen (old
+-- parcels from before any export was loaded). They become bare parcels with
+-- no name, client or weight, then go into sale stock like the rest.
+drop function if exists sale_add_many(jsonb);
+create or replace function sale_add_many(p_rows jsonb, p_create_unknown boolean default false) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  r record;
+  added text[] := '{}'; already text[] := '{}'; unknown text[] := '{}'; created text[] := '{}';
+  refused jsonb := '[]'::jsonb;
+begin
+  if not sees_money() then raise exception 'Only the office may add to sale stock'; end if;
+  if jsonb_array_length(coalesce(p_rows, '[]'::jsonb)) > 2000 then
+    raise exception 'Too many at once. Import at most 2,000 parcels per file.';
+  end if;
+  for r in
+    select distinct on (bc) bc, sh from (
+      select btrim(x.barcode) bc, nullif(upper(btrim(coalesce(x.shelf, ''))), '') sh
+      from jsonb_to_recordset(coalesce(p_rows, '[]'::jsonb)) x(barcode text, shelf text)) t
+    where bc <> '' order by bc
+  loop
+    begin
+      if p_create_unknown and not exists (select 1 from parcels where barcode = r.bc) then
+        insert into parcels (barcode, status, received_at, updated_at, updated_by, notes)
+        values (r.bc, 'received', now(), now(), auth.uid(), 'Added for sale stock: not in any export');
+        insert into parcel_events (barcode, at, actor, from_status, to_status, loc, note)
+        values (r.bc, now(), auth.uid(), null, 'received', null, 'added for sale stock, not in any export');
+        created := created || r.bc;
+      end if;
+      perform sale_add(r.bc);
+      if r.sh is not null then update sale_items set spot = r.sh where barcode = r.bc; end if;
+      added := added || r.bc;
+    exception when others then
+      if sqlerrm like 'ALREADY:%' then already := already || r.bc;
+      elsif sqlerrm like 'No parcel%' then unknown := unknown || r.bc;
+      else refused := refused || jsonb_build_object('barcode', r.bc, 'why', sqlerrm);
+      end if;
+    end;
+  end loop;
+  return jsonb_build_object('added', to_jsonb(added), 'already', to_jsonb(already),
+                            'unknown', to_jsonb(unknown), 'created', to_jsonb(created), 'refused', refused);
+end $$;
+grant execute on function sale_add_many(jsonb, boolean) to authenticated;

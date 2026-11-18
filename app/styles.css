@@ -774,3 +774,5 @@ main.enter .zbar i{animation:grow 1s .25s cubic-bezier(.2,.8,.2,1) both;transfor
 .sale-imp-list summary{cursor:pointer;font-weight:600;padding:6px 0}
 .sale-imp-list .list{max-height:260px;overflow:auto}
 .sale-imp-go{align-self:flex-start}
+.sale-imp-unk{gap:10px;align-items:flex-start;padding:10px 12px;border-radius:var(--r-sm);background:var(--surface-2);font-size:13.5px;cursor:pointer}
+.sale-imp-unk input{margin-top:3px;width:18px;height:18px;flex:none}

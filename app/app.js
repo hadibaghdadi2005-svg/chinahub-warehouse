@@ -5330,29 +5330,53 @@ function openSaleImport() {
     listOf("Not in the warehouse", gone, r => STATUS[r.status] || r.status);
     listOf("Unknown number", unknown, () => "No parcel with this number in the app");
     listOf("Already for sale", already, () => "Already in sale stock");
+    /* Numbers the app has never seen (old parcels from before any export was
+       loaded) can still go into sale stock, as bare items to name and weigh. */
+    unknownRows = unknown;
+    addUnknown = false;
+    let goBtn = null;
+    const goLabel = () => "Add " + nf0.format(ready.length + (addUnknown ? unknown.length : 0)) + " to sale stock";
+    if (unknown.length) {
+      const lab = el("label", "row sale-imp-unk");
+      const cb = el("input"); cb.type = "checkbox";
+      addUnknown = cb.checked = unknown.some(r => photos[r.barcode]);
+      cb.onchange = () => {
+        addUnknown = cb.checked;
+        if (goBtn) goBtn.textContent = goLabel();
+        else if (addUnknown && !ready.length) { goBtn = makeGo(); out.append(goBtn); }
+      };
+      lab.append(cb, el("span", null, "Also add the " + nf0.format(unknown.length) + " unknown numbers" +
+        (unknown.some(r => photos[r.barcode]) ? ", with their photos" : "") +
+        ". They have no name or weight in the app, so you type those later."));
+      out.append(lab);
+    }
+    const makeGo = () => {
+      const go = el("button", "btn pri sale-imp-go", goLabel());
+      go.type = "button";
+      go.onclick = () => run(go);
+      return go;
+    };
     const photoOnly = already.filter(r => photos[r.barcode]);
-    if (!ready.length && photoOnly.length) {
+    if (!ready.length && photoOnly.length && !addUnknown) {
       const go = el("button", "btn pri sale-imp-go", "Add photos to " + nf0.format(photoOnly.length) + " items");
       go.type = "button";
       go.onclick = () => run(go);
       out.append(go);
     }
-    if (ready.length) {
-      const go = el("button", "btn pri sale-imp-go", "Add " + nf0.format(ready.length) + " to sale stock");
-      go.type = "button";
-      go.onclick = () => run(go);
-      out.append(go);
-    }
+    if (ready.length || addUnknown) { goBtn = makeGo(); out.append(goBtn); }
   }
+  let unknownRows = [], addUnknown = false;
   ck.onclick = check;
 
   async function run(go) {
     busy = true; go.disabled = true; ck.disabled = true;
     let added = [], refused = [];
-    if (ready.length) {
-      go.textContent = "Adding " + nf0.format(ready.length) + "…";
+    const toAdd = addUnknown ? ready.concat(unknownRows) : ready;
+    if (toAdd.length) {
+      go.textContent = "Adding " + nf0.format(toAdd.length) + "…";
       const { data, error } = await S.sb.rpc("sale_add_many", {
-        p_rows: ready.map(r => ({ barcode: r.barcode, shelf: r.shelf || null })) });
+        p_rows: toAdd.map(r => ({ barcode: r.barcode, shelf: r.shelf || null })),
+        p_create_unknown: !!addUnknown });
       if (error) { busy = false; go.disabled = false; ck.disabled = false; go.textContent = "Try again"; toast(error.message, "bad"); return; }
       added = (data && data.added) || [];
       refused = (data && data.refused) || [];
@@ -8416,10 +8440,16 @@ document.addEventListener("pointerdown", e => {
 async function loadMe() {
   const uid = S.session?.user?.id;
   if (!uid) { S.me = null; return; }
-  const { data, error } = await S.sb.from("profiles")
-    .select("id,name,role,active,username").eq("id", uid).maybeSingle();
-  if (error) { S.me = null; return; }
-  S.me = (data && data.active) ? data : null;
+  /* Right after the page opens, the sign-in token may still be renewing and
+     the first read can fail. Try a few times before saying "no access". */
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (attempt) await new Promise(r => setTimeout(r, 700 * attempt));
+    const { data, error } = await S.sb.from("profiles")
+      .select("id,name,role,active,username").eq("id", uid).maybeSingle();
+    if (!error && data) { S.me = data.active ? data : null; return; }
+    if (!error && !data && attempt >= 1) { S.me = null; return; }
+  }
+  S.me = null;
 }
 
 async function boot() {
