@@ -5155,6 +5155,207 @@ function openSaleItem(it0, opts = {}) {
   }
 }
 
+/* The PDA scanner's export: "barcode,shelf,scanned at", or just one barcode
+   per line. Shipping-client labels (SHIP-123) are shipments and are left out. */
+function parsePdaText(text) {
+  const rows = [], ships = [];
+  const lines = String(text || "").replace(/^﻿/, "").split(/\r?\n/);
+  const cells = line => {
+    const out = []; let cur = "", q = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (q) { if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; } else if (ch === '"') q = false; else cur += ch; }
+      else if (ch === '"') q = true;
+      else if (ch === "," || ch === "\t" || ch === ";") { out.push(cur); cur = ""; }
+      else cur += ch;
+    }
+    out.push(cur);
+    return out.map(s => s.trim());
+  };
+  let iBc = 0, iSh = 1;
+  for (const [n, line] of lines.entries()) {
+    if (!line.trim()) continue;
+    const c = cells(line);
+    if (n === 0 || /barcode/i.test(line)) {
+      const h = c.map(s => s.toLowerCase());
+      if (h.some(s => /barcode|tracking|order/.test(s))) {
+        iBc = Math.max(0, h.findIndex(s => /barcode|tracking|order/.test(s)));
+        iSh = h.findIndex(s => /shelf|zone|place/.test(s));
+        continue;
+      }
+    }
+    const bc = normBc((c[iBc] || "").replace(/^[='"]+|['"]+$/g, ""));
+    if (!bc) continue;
+    if (/^SHIP-\d+$/i.test(bc)) { ships.push(bc); continue; }
+    rows.push({ barcode: bc, shelf: iSh >= 0 ? (c[iSh] || "").toUpperCase() : "" });
+  }
+  const seen = new Set(), uniq = [];
+  for (const r of rows) if (!seen.has(r.barcode)) { seen.add(r.barcode); uniq.push(r); }
+  return { rows: uniq, repeats: rows.length - uniq.length, ships };
+}
+
+function openSaleImport() {
+  document.querySelector(".sale-imp")?.remove();
+  const scrim = el("div", "scrim sale-imp");
+  const m = el("div", "modal sale-m");
+  const close = () => { scrim.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = e => { if (e.key === "Escape" && !busy) close(); };
+  document.addEventListener("keydown", onKey);
+  let busy = false;
+
+  const head = el("div", "sale-m-h");
+  const ht = el("div");
+  ht.append(el("h3", null, "Import from PDA"));
+  ht.append(el("div", "li-s", "On the PDA, scan a label such as SALE-01, then the parcels. Press Export, " +
+    "then Copy all and paste it here, or Save as file and choose the file."));
+  head.append(ht);
+  const x = el("button", "btn sm", "Close");
+  x.type = "button"; x.onclick = () => { if (!busy) close(); };
+  head.append(x);
+  m.append(head);
+
+  const ta = el("textarea", "inp mono sale-imp-ta");
+  ta.placeholder = "barcode,shelf,scanned at\n79040785454949,SALE-01,2026-11-18T09:00:00Z\n…";
+  ta.spellcheck = false;
+  m.append(ta);
+  const row = el("div", "row sale-ph-b");
+  const fl = el("label", "btn");
+  const fi = el("input"); fi.type = "file"; fi.accept = ".csv,.txt,text/csv,text/plain"; fi.hidden = true;
+  fi.onchange = async () => { const f = fi.files && fi.files[0]; if (f) { ta.value = await f.text(); check(); } fi.value = ""; };
+  fl.append(document.createTextNode("Choose file"), fi);
+  const ck = el("button", "btn pri", "Check");
+  ck.type = "button";
+  row.append(fl, ck);
+  m.append(row);
+  const out = el("div", "sale-imp-out");
+  m.append(out);
+
+  let ready = [];
+  async function check() {
+    const p = parsePdaText(ta.value);
+    out.replaceChildren();
+    ready = [];
+    if (!p.rows.length) { out.append(banner("bad", "No parcel numbers found", "Paste the PDA export, or one tracking number per line.")); return; }
+    if (p.rows.length > 2000) { out.append(banner("bad", "Too many", "Import at most 2,000 parcels at a time.")); return; }
+    busy = true; ck.disabled = true; ck.textContent = "Checking…";
+    const codes = p.rows.map(r => r.barcode);
+    const parcels = new Map(), inSale = new Set();
+    try {
+      for (let i = 0; i < codes.length; i += 200) {
+        const part = codes.slice(i, i + 200);
+        const [a, b] = await Promise.all([
+          S.sb.from("parcels").select("barcode,status,client_id,customer,name,weight_kg").in("barcode", part),
+          S.sb.from("sale_items").select("barcode").in("barcode", part),
+        ]);
+        if (a.error) throw a.error;
+        if (b.error) throw b.error;
+        for (const r of a.data || []) parcels.set(r.barcode, r);
+        for (const r of b.data || []) inSale.add(r.barcode);
+      }
+    } catch (e) {
+      busy = false; ck.disabled = false; ck.textContent = "Check";
+      out.append(banner("bad", "Could not check", String(e && e.message || e)));
+      return;
+    }
+    busy = false; ck.disabled = false; ck.textContent = "Check again";
+    const already = [], gone = [], unknown = [];
+    for (const r of p.rows) {
+      const pr = parcels.get(r.barcode);
+      if (inSale.has(r.barcode)) already.push(r);
+      else if (!pr) unknown.push(r);
+      else if (!["received", "shelved", "expected"].includes(pr.status)) gone.push({ ...r, status: pr.status });
+      else ready.push({ ...r, p: pr });
+    }
+    const tiles = el("div", "tiles");
+    const t = (k, n, note, colour) => {
+      const d = el("div", "tile");
+      d.append(el("div", "k", k));
+      const vv = el("div", "v", nf0.format(n)); if (colour) vv.style.color = colour;
+      d.append(vv);
+      if (note) d.append(el("div", "n", note));
+      return d;
+    };
+    tiles.append(
+      t("Ready to add", ready.length, nf1.format(ready.reduce((a, r) => a + Number(r.p.weight_kg || 0), 0)) + " kg", "var(--ok)"),
+      t("Already for sale", already.length, "skipped"),
+      t("Not in the warehouse", gone.length, "delivered, Waseet or Hamra", gone.length ? "var(--warn)" : null),
+      t("Unknown number", unknown.length, "not in the app", unknown.length ? "var(--danger)" : null),
+    );
+    out.append(tiles);
+    const notes = [];
+    if (p.repeats) notes.push(nf0.format(p.repeats) + " repeated scans counted once");
+    if (p.ships.length) notes.push(nf0.format(p.ships.length) + " shipping-client labels left out");
+    const big = ready.filter(r => r.p.client_id === "1941515").length;
+    if (big) notes.push(nf0.format(big) + " belong to client 1941515");
+    if (notes.length) out.append(el("div", "li-s sale-imp-note", notes.join(" · ")));
+    const listOf = (title, rs, line) => {
+      if (!rs.length) return;
+      const d = el("details", "sale-imp-list");
+      d.append(el("summary", null, title + " (" + nf0.format(rs.length) + ")"));
+      const ul = el("div", "list");
+      for (const r of rs.slice(0, 300)) {
+        const li = el("div", "li");
+        const mm = el("div", "li-m");
+        mm.append(el("div", "li-nm mono", r.barcode), el("div", "li-s", line(r)));
+        li.append(mm); ul.append(li);
+      }
+      d.append(ul);
+      out.append(d);
+    };
+    listOf("Ready to add", ready, r => [cleanCn(r.p.name).slice(0, 60), nf1.format(Number(r.p.weight_kg || 0)) + " kg",
+      r.shelf ? "kept at " + r.shelf : "", r.p.client_id === "1941515" ? "client 1941515" : ""].filter(Boolean).join("  ·  "));
+    listOf("Not in the warehouse", gone, r => STATUS[r.status] || r.status);
+    listOf("Unknown number", unknown, () => "No parcel with this number in the app");
+    listOf("Already for sale", already, () => "Already in sale stock");
+    if (ready.length) {
+      const go = el("button", "btn pri sale-imp-go", "Add " + nf0.format(ready.length) + " to sale stock");
+      go.type = "button";
+      go.onclick = () => run(go);
+      out.append(go);
+    }
+  }
+  ck.onclick = check;
+
+  async function run(go) {
+    busy = true; go.disabled = true; ck.disabled = true;
+    go.textContent = "Adding " + nf0.format(ready.length) + "…";
+    const { data, error } = await S.sb.rpc("sale_add_many", {
+      p_rows: ready.map(r => ({ barcode: r.barcode, shelf: r.shelf || null })) });
+    if (error) { busy = false; go.disabled = false; ck.disabled = false; go.textContent = "Try again"; toast(error.message, "bad"); return; }
+    const added = (data && data.added) || [];
+    const refused = (data && data.refused) || [];
+    /* English names, 20 at a time. */
+    const { data: rows } = added.length
+      ? await S.sb.from("sale_items").select("id,barcode,name_cn,name_en").in("barcode", added.slice(0, 2000))
+      : { data: [] };
+    const todo = (rows || []).filter(r => !r.name_en && r.name_cn);
+    let done = 0;
+    for (let i = 0; i < todo.length; i += 20) {
+      go.textContent = "Translating names " + nf0.format(done) + " of " + nf0.format(todo.length) + "…";
+      const part = todo.slice(i, i + 20);
+      const r = await callFn("translate", { texts: part.map(x => cleanCn(x.name_cn)) });
+      const en = (r.ok && r.data && r.data.en) || [];
+      await Promise.all(part.map((x, k) => {
+        const t = en[k] ? en[k].charAt(0).toUpperCase() + en[k].slice(1) : "";
+        return t ? S.sb.from("sale_items").update({ name_en: t }).eq("id", x.id) : null;
+      }));
+      done += part.length;
+    }
+    busy = false;
+    S.stats = null; S.rows = null; S.zoneStats = null;
+    close();
+    toast(nf0.format(added.length) + " added to sale stock" + (refused.length ? " · " + nf0.format(refused.length) + " refused" : ""),
+      refused.length ? "bad" : "ok");
+    S.saleView = "stock";
+    loadSale();
+  }
+
+  scrim.append(m);
+  scrim.addEventListener("click", e => { if (e.target === scrim && !busy) close(); });
+  document.body.append(scrim);
+  ta.focus();
+}
+
 function vSale() {
   const v = el("section");
   const head = el("div", "vhead");
@@ -5178,12 +5379,15 @@ function vSale() {
   si.dataset.keep = "sale-scan";
   const sb = el("button", "btn pri", S.saleScanBusy ? "Adding…" : "Add to sale stock");
   sb.type = "submit"; sb.disabled = !!S.saleScanBusy;
-  sc.append(si, sb);
+  const imp = el("button", "btn", "Import from PDA");
+  imp.type = "button";
+  imp.onclick = openSaleImport;
+  sc.append(si, sb, imp);
   sc.addEventListener("submit", ev => { ev.preventDefault(); const c = si.value; si.value = ""; saleScan(c); });
   v.append(sc);
   /* With a handheld scanner (a computer), keep the box ready for the next
      scan. On a phone this would pop the keyboard up on every redraw. */
-  if (matchMedia("(pointer: fine)").matches && !document.querySelector(".sale-ed"))
+  if (matchMedia("(pointer: fine)").matches && !document.querySelector(".sale-ed, .sale-imp"))
     setTimeout(() => {
       const e = document.querySelector('[data-keep="sale-scan"]');
       const a = document.activeElement;

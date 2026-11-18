@@ -156,3 +156,39 @@ begin
   if n = d then raise exception 'bulk_move: pattern not found'; end if;
   execute n;
 end $patch$;
+
+-- Many at once, from the PDA scanner's export (barcode, shelf, scanned at).
+-- Each row is tried on its own: one bad barcode does not stop the rest. The
+-- shelf the PDA scanned first (e.g. SALE-01) becomes the item's "kept at".
+create or replace function sale_add_many(p_rows jsonb) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  r record;
+  added text[] := '{}'; already text[] := '{}'; unknown text[] := '{}';
+  refused jsonb := '[]'::jsonb;
+begin
+  if not sees_money() then raise exception 'Only the office may add to sale stock'; end if;
+  if jsonb_array_length(coalesce(p_rows, '[]'::jsonb)) > 2000 then
+    raise exception 'Too many at once. Import at most 2,000 parcels per file.';
+  end if;
+  for r in
+    select distinct on (bc) bc, sh from (
+      select btrim(x.barcode) bc, nullif(upper(btrim(coalesce(x.shelf, ''))), '') sh
+      from jsonb_to_recordset(coalesce(p_rows, '[]'::jsonb)) x(barcode text, shelf text)) t
+    where bc <> '' order by bc
+  loop
+    begin
+      perform sale_add(r.bc);
+      if r.sh is not null then update sale_items set spot = r.sh where barcode = r.bc; end if;
+      added := added || r.bc;
+    exception when others then
+      if sqlerrm like 'ALREADY:%' then already := already || r.bc;
+      elsif sqlerrm like 'No parcel%' then unknown := unknown || r.bc;
+      else refused := refused || jsonb_build_object('barcode', r.bc, 'why', sqlerrm);
+      end if;
+    end;
+  end loop;
+  return jsonb_build_object('added', to_jsonb(added), 'already', to_jsonb(already),
+                            'unknown', to_jsonb(unknown), 'refused', refused);
+end $$;
+grant execute on function sale_add_many(jsonb) to authenticated;
