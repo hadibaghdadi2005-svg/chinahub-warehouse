@@ -5221,7 +5221,26 @@ function openSaleImport() {
   const row = el("div", "row sale-ph-b");
   const fl = el("label", "btn");
   const fi = el("input"); fi.type = "file"; fi.accept = ".csv,.txt,text/csv,text/plain"; fi.hidden = true;
-  fi.onchange = async () => { const f = fi.files && fi.files[0]; if (f) { ta.value = await f.text(); check(); } fi.value = ""; };
+  fi.accept = ".csv,.txt,.json,text/csv,text/plain,application/json";
+  /* The PDA's "Save with photos" file: JSON with the scans and a photo each. */
+  let photos = {};
+  fi.onchange = async () => {
+    const f = fi.files && fi.files[0];
+    fi.value = "";
+    if (!f) return;
+    const text = await f.text();
+    photos = {};
+    if (/^\s*\{/.test(text)) {
+      let j;
+      try { j = JSON.parse(text); } catch (_) { j = null; }
+      if (!j || !Array.isArray(j.rows)) { toast("That file is not a PDA export.", "bad"); return; }
+      for (const r of j.rows) if (r && r.barcode && typeof r.photo === "string" && r.photo.startsWith("data:image/")) photos[normBc(r.barcode)] = r.photo;
+      ta.value = "barcode,shelf,scanned at\n" + j.rows.filter(r => r && r.barcode)
+        .map(r => [r.barcode, r.shelf || "", r.scanned_at || ""].join(",")).join("\n");
+    } else ta.value = text;
+    check();
+  };
+  ta.addEventListener("input", () => { photos = {}; });
   fl.append(document.createTextNode("Choose file"), fi);
   const ck = el("button", "btn pri", "Check");
   ck.type = "button";
@@ -5283,6 +5302,10 @@ function openSaleImport() {
     );
     out.append(tiles);
     const notes = [];
+    const nPhoto = Object.keys(photos).length;
+    const nReadyPhoto = ready.filter(r => photos[r.barcode]).length;
+    if (nPhoto) notes.push((nReadyPhoto === 1 ? "1 of the ready parcels has a photo" : nf0.format(nReadyPhoto) + " of the ready parcels have a photo") +
+      (already.some(r => photos[r.barcode]) ? "; photos for parcels already for sale are added where they have none" : ""));
     if (p.repeats) notes.push(nf0.format(p.repeats) + " repeated scans counted once");
     if (p.ships.length) notes.push(nf0.format(p.ships.length) + " shipping-client labels left out");
     const big = ready.filter(r => r.p.client_id === "1941515").length;
@@ -5307,6 +5330,13 @@ function openSaleImport() {
     listOf("Not in the warehouse", gone, r => STATUS[r.status] || r.status);
     listOf("Unknown number", unknown, () => "No parcel with this number in the app");
     listOf("Already for sale", already, () => "Already in sale stock");
+    const photoOnly = already.filter(r => photos[r.barcode]);
+    if (!ready.length && photoOnly.length) {
+      const go = el("button", "btn pri sale-imp-go", "Add photos to " + nf0.format(photoOnly.length) + " items");
+      go.type = "button";
+      go.onclick = () => run(go);
+      out.append(go);
+    }
     if (ready.length) {
       const go = el("button", "btn pri sale-imp-go", "Add " + nf0.format(ready.length) + " to sale stock");
       go.type = "button";
@@ -5318,12 +5348,43 @@ function openSaleImport() {
 
   async function run(go) {
     busy = true; go.disabled = true; ck.disabled = true;
-    go.textContent = "Adding " + nf0.format(ready.length) + "…";
-    const { data, error } = await S.sb.rpc("sale_add_many", {
-      p_rows: ready.map(r => ({ barcode: r.barcode, shelf: r.shelf || null })) });
-    if (error) { busy = false; go.disabled = false; ck.disabled = false; go.textContent = "Try again"; toast(error.message, "bad"); return; }
-    const added = (data && data.added) || [];
-    const refused = (data && data.refused) || [];
+    let added = [], refused = [];
+    if (ready.length) {
+      go.textContent = "Adding " + nf0.format(ready.length) + "…";
+      const { data, error } = await S.sb.rpc("sale_add_many", {
+        p_rows: ready.map(r => ({ barcode: r.barcode, shelf: r.shelf || null })) });
+      if (error) { busy = false; go.disabled = false; ck.disabled = false; go.textContent = "Try again"; toast(error.message, "bad"); return; }
+      added = (data && data.added) || [];
+      refused = (data && data.refused) || [];
+    }
+    /* Photos from the PDA: for every item in the file that has none yet. */
+    let photoDone = 0, photoFail = 0;
+    const withPhoto = Object.keys(photos);
+    if (withPhoto.length) {
+      const items = [];
+      for (let i = 0; i < withPhoto.length; i += 200) {
+        const { data: part } = await S.sb.from("sale_items").select("id,barcode,photo_path").in("barcode", withPhoto.slice(i, i + 200));
+        for (const it of part || []) if (!it.photo_path) items.push(it);
+      }
+      let next = 0;
+      const one = async () => {
+        while (next < items.length) {
+          const it = items[next++];
+          go.textContent = "Uploading photos " + nf0.format(photoDone + photoFail) + " of " + nf0.format(items.length) + "…";
+          try {
+            const blob = await (await fetch(photos[it.barcode])).blob();
+            const small = blob.size > 600000 ? await shrinkPhoto(blob) : blob;
+            const path = it.id + "/" + Date.now() + ".jpg";
+            const up = await S.sb.storage.from(SALE_BUCKET).upload(path, small, { contentType: "image/jpeg" });
+            if (up.error) throw up.error;
+            const { error: ue } = await S.sb.from("sale_items").update({ photo_path: path }).eq("id", it.id);
+            if (ue) throw ue;
+            photoDone++;
+          } catch (_) { photoFail++; }
+        }
+      };
+      await Promise.all([one(), one(), one(), one()]);
+    }
     /* English names, 20 at a time. */
     const { data: rows } = added.length
       ? await S.sb.from("sale_items").select("id,barcode,name_cn,name_en").in("barcode", added.slice(0, 2000))
@@ -5344,8 +5405,11 @@ function openSaleImport() {
     busy = false;
     S.stats = null; S.rows = null; S.zoneStats = null;
     close();
-    toast(nf0.format(added.length) + " added to sale stock" + (refused.length ? " · " + nf0.format(refused.length) + " refused" : ""),
-      refused.length ? "bad" : "ok");
+    toast(nf0.format(added.length) + " added to sale stock" +
+      (photoDone ? " · " + nf0.format(photoDone) + " photos" : "") +
+      (photoFail ? " · " + nf0.format(photoFail) + " photos failed" : "") +
+      (refused.length ? " · " + nf0.format(refused.length) + " refused" : ""),
+      refused.length || photoFail ? "bad" : "ok");
     S.saleView = "stock";
     loadSale();
   }

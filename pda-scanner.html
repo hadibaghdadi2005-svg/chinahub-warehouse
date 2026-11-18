@@ -75,6 +75,10 @@ header .sp{margin-left:auto;display:flex;gap:6px}
 .row .bd b{display:block;font-family:var(--mono);font-size:14px;font-weight:600;word-break:break-all}
 .row .bd span{display:block;font-size:12.5px;color:var(--fg-dim);margin-top:1px}
 .row time{font-family:var(--mono);font-size:11px;color:var(--fg-faint);flex:none;font-variant-numeric:tabular-nums}
+.row .ph{width:48px;height:48px;flex:none;border-radius:8px;object-fit:cover;border:1px solid var(--line);padding:0;background:var(--surface-2)}
+.row .cam{width:48px;height:48px;flex:none;border-radius:8px;border:1px dashed var(--line);background:var(--surface-2);
+  font-size:11px;font-weight:700;color:var(--fg-dim);line-height:1.1;padding:2px}
+.row .cam b{display:block;font-size:20px;color:var(--fg)}
 .empty{padding:42px 22px;text-align:center;color:var(--fg-dim);font-size:14px;line-height:1.5}
 .empty b{display:block;color:var(--fg);font-size:16px;margin-bottom:6px}
 
@@ -112,6 +116,7 @@ textarea{
 <header>
   <h1>Shelf Scanner</h1>
   <div class="sp">
+    <button class="mini" id="photoBtn" type="button">Photo</button>
     <button class="mini" id="noShelfBtn" type="button">No shelf</button>
     <button class="mini" id="exportBtn" type="button">Export</button>
     <button class="mini" id="helpBtn" type="button">Help</button>
@@ -137,6 +142,7 @@ textarea{
 </div>
 
 <div id="feed"></div>
+<input id="cam" type="file" accept="image/*" capture="environment" hidden>
 
 <dialog id="exportDlg">
   <div class="dh">
@@ -149,6 +155,9 @@ textarea{
     <div class="actions">
       <button class="btn go" id="copyBtn" type="button">Copy all</button>
       <button class="btn" id="downloadBtn" type="button">Save as file</button>
+    </div>
+    <div class="actions" id="photoActions" hidden>
+      <button class="btn go" id="photoSaveBtn" type="button">Save with photos</button>
     </div>
     <div class="actions">
       <button class="btn bad" id="clearBtn" type="button">Clear all scans</button>
@@ -165,6 +174,7 @@ textarea{
     <p><b>1.</b> Scan a shelf barcode. It appears at the top as the current shelf.</p>
     <p><b>2.</b> Scan every parcel on that shelf. Each one is recorded against it.</p>
     <p><b>3.</b> Scan the next shelf barcode and carry on.</p>
+    <p><b>Photos</b> (for Sale stock, only in No shelf mode): press <b>No shelf</b>, then <b>Photo</b> so it is lit. After each parcel scan the camera opens; take the picture. You can also tap the camera box next to any parcel to take or retake its photo. Photos stay on this device. To send them, press <b>Export</b> → <b>Save with photos</b> and import that file in the warehouse app under Sale stock → Import from PDA.</p>
     <p><b>Parcels only, no shelf</b> (for example for Sale stock): press <b>No shelf</b>, then scan the parcels. They are recorded with no shelf. Scanning any shelf barcode, or pressing the button again, goes back to shelves.</p>
     <p>Short codes are treated as shelves or zones (ZONE-SHIP, C-01-02…), long mostly-numeric codes as parcels. Shipping-client labels (SHIP-123) count as goods: scan a zone or shelf first, then the SHIP labels in it. If a code is scanned twice it is counted once and flagged as a repeat.</p>
     <p>Everything is stored on this device, so you can close the page and come back. Nothing is sent anywhere.</p>
@@ -230,6 +240,122 @@ function toast(msg){
 
 const hhmm = t => new Date(t).toTimeString().slice(0,5);
 
+/* ---- photos ----
+   One photo per parcel, kept on this device in IndexedDB (localStorage is far
+   too small for pictures). Written for old browsers too: the PDA runs Chrome 79. */
+const PDB = "pdaScannerPhotos";
+let dbP = null;
+function photoDb(){
+  if(!dbP) dbP = new Promise(function(res, rej){
+    const r = indexedDB.open(PDB, 1);
+    r.onupgradeneeded = function(){ r.result.createObjectStore("p"); };
+    r.onsuccess = function(){ res(r.result); };
+    r.onerror = function(){ rej(r.error); };
+  });
+  return dbP;
+}
+function photoTx(mode, work){
+  return photoDb().then(function(d){
+    return new Promise(function(res, rej){
+      const tx = d.transaction("p", mode);
+      const out = work(tx.objectStore("p"));
+      tx.oncomplete = function(){ res(out); };
+      tx.onerror = function(){ rej(tx.error); };
+      tx.onabort = function(){ rej(tx.error || new Error("storage refused")); };
+    });
+  });
+}
+const photoUrl = {};          // barcode → object URL for the thumbnail
+function rememberUrl(code, blob){
+  if(photoUrl[code]) URL.revokeObjectURL(photoUrl[code]);
+  photoUrl[code] = URL.createObjectURL(blob);
+}
+function allPhotos(){
+  return photoDb().then(function(d){
+    return new Promise(function(res, rej){
+      const out = {};
+      const tx = d.transaction("p", "readonly");
+      const cur = tx.objectStore("p").openCursor();
+      cur.onsuccess = function(){ const c = cur.result; if(c){ out[c.key] = c.value; c.continue(); } };
+      tx.oncomplete = function(){ res(out); };
+      tx.onerror = function(){ rej(tx.error); };
+    });
+  });
+}
+
+/* Chrome before 81 ignores a photo's EXIF rotation, so phone pictures come
+   out sideways. Read the orientation and turn the picture ourselves. */
+function exifOrientation(buf){
+  try{
+    const v = new DataView(buf);
+    if(v.getUint16(0) !== 0xFFD8) return 1;
+    let o = 2;
+    while(o + 4 < v.byteLength){
+      const mk = v.getUint16(o), len = v.getUint16(o + 2);
+      if(mk === 0xFFE1 && v.getUint32(o + 4) === 0x45786966){
+        const t = o + 10, le = v.getUint16(t) === 0x4949;
+        const ifd = t + v.getUint32(t + 4, le), n = v.getUint16(ifd, le);
+        for(let i = 0; i < n; i++){
+          const e = ifd + 2 + i * 12;
+          if(v.getUint16(e, le) === 0x0112) return v.getUint16(e + 8, le);
+        }
+        return 1;
+      }
+      if((mk & 0xFF00) !== 0xFF00) break;
+      o += 2 + len;
+    }
+  }catch(_){}
+  return 1;
+}
+const autoOrients = !!(window.CSS && CSS.supports && CSS.supports("image-orientation", "from-image"));
+function loadImage(file){
+  return new Promise(function(res, rej){
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = function(){ URL.revokeObjectURL(url); res(img); };
+    img.onerror = function(){ URL.revokeObjectURL(url); rej(new Error("not a picture")); };
+    img.src = url;
+  });
+}
+/* About 1000 px on the long side, JPEG: plenty for a product photo and small
+   enough that a hundred of them fit easily on the PDA. */
+function shrinkPhoto(file){
+  const head = file.slice(0, 131072).arrayBuffer
+    ? file.slice(0, 131072).arrayBuffer()
+    : new Promise(function(res){ const fr = new FileReader(); fr.onload = function(){ res(fr.result); }; fr.readAsArrayBuffer(file.slice(0, 131072)); });
+  return Promise.all([head, loadImage(file)]).then(function(r){
+    const ori = autoOrients ? 1 : exifOrientation(r[0]);
+    const img = r[1];
+    const k = Math.min(1, 1000 / Math.max(img.naturalWidth, img.naturalHeight));
+    const w = Math.round(img.naturalWidth * k), h = Math.round(img.naturalHeight * k);
+    const turn = ori >= 5 && ori <= 8;
+    const c = document.createElement("canvas");
+    c.width = turn ? h : w; c.height = turn ? w : h;
+    const g = c.getContext("2d");
+    if(ori === 3){ g.translate(w, h); g.rotate(Math.PI); }
+    else if(ori === 6){ g.translate(h, 0); g.rotate(Math.PI / 2); }
+    else if(ori === 8){ g.translate(0, w); g.rotate(-Math.PI / 2); }
+    g.drawImage(img, 0, 0, w, h);
+    return new Promise(function(res){ c.toBlob(res, "image/jpeg", 0.75); });
+  });
+}
+
+let camFor = "";
+function openCamera(code){
+  camFor = code;
+  const cam = $("#cam");
+  cam.value = "";
+  cam.click();
+}
+function savePhoto(code, file){
+  return shrinkPhoto(file).then(function(blob){
+    if(!blob) throw new Error("could not read the picture");
+    return photoTx("readwrite", function(st){ st.put(blob, code); }).then(function(){
+      rememberUrl(code, blob);
+    });
+  });
+}
+const photoCount = () => Object.keys(photoUrl).length;
+
 function handle(raw){
   const code = String(raw || "").trim().replace(/\s+/g," ").toUpperCase();
   if(!code) return;
@@ -258,6 +384,8 @@ function handle(raw){
   }
   state.rows.unshift({ k:"p", code, shelf:state.shelf, t:Date.now() });
   beep("ok"); save(); render();
+  /* The scanner's Enter counts as a tap, so the camera may open straight away. */
+  if(state.noShelf && state.photoOn && !isShipLabel(code)) openCamera(code);
 }
 
 function render(){
@@ -267,6 +395,11 @@ function render(){
   $("#nShelves").textContent = shelves.size;
   $("#nDupes").textContent = state.dupes;
 
+  const pbn = $("#photoBtn");
+  const pc = photoCount();
+  pbn.textContent = pc ? "Photo · " + pc : "Photo";
+  pbn.classList.toggle("on", !!state.photoOn);
+  pbn.hidden = !state.noShelf;      /* photos only in No shelf mode */
   const nsb = $("#noShelfBtn");
   nsb.textContent = state.noShelf ? "Shelves" : "No shelf";
   nsb.classList.toggle("on", !!state.noShelf);
@@ -321,7 +454,23 @@ function render(){
     bd.appendChild(b); bd.appendChild(sp);
     const tm = document.createElement("time");
     tm.textContent = hhmm(r.t);
-    row.appendChild(ic); row.appendChild(bd); row.appendChild(tm);
+    row.appendChild(ic); row.appendChild(bd);
+    /* Photos belong to parcels scanned with no shelf (sale items) only. */
+    if(r.k === "p" && !r.shelf && !isShipLabel(r.code) && ((state.noShelf && state.photoOn) || photoUrl[r.code])){
+      let pb;
+      if(photoUrl[r.code]){
+        pb = document.createElement("img");
+        pb.className = "ph"; pb.src = photoUrl[r.code]; pb.alt = "photo";
+        pb.title = "Tap to retake";
+      }else{
+        pb = document.createElement("button");
+        pb.type = "button"; pb.className = "cam";
+        pb.innerHTML = "<b>&#128247;</b>photo";
+      }
+      pb.addEventListener("click", function(){ openCamera(r.code); });
+      row.appendChild(pb);
+    }
+    row.appendChild(tm);
     feed.appendChild(row);
   }
 }
@@ -352,6 +501,29 @@ document.addEventListener("click", e => {
 });
 window.addEventListener("pageshow", refocus);
 
+/* Photo mode: the camera opens after each parcel scan. */
+$("#photoBtn").addEventListener("click", () => {
+  state.photoOn = !state.photoOn;
+  save(); render(); refocus();
+  toast(state.photoOn ? "Photo on: the camera opens after each parcel scanned with no shelf" : "Photo off");
+});
+$("#cam").addEventListener("change", function(){
+  const f = this.files && this.files[0];
+  const code = camFor;
+  camFor = "";
+  if(!f || !code){ refocus(); return; }
+  toast("Saving photo…");
+  savePhoto(code, f).then(function(){
+    beep("ok"); render(); toast("Photo saved for " + code);
+  }).catch(function(e){
+    beep("bad"); toast("Photo not saved: " + ((e && e.message) || e));
+  }).then(refocus);
+});
+allPhotos().then(function(all){
+  for(const k in all) rememberUrl(k, all[k]);
+  render();
+}).catch(function(){});
+
 /* Parcels only: everything scanned next is recorded with no shelf. */
 $("#noShelfBtn").addEventListener("click", () => {
   state.noShelf = !state.noShelf;
@@ -375,6 +547,10 @@ $("#exportBtn").addEventListener("click", () => {
     : parcels.length + " parcels across " + new Set(parcels.map(r => r.shelf).filter(Boolean)).size + " shelves" +
       (loose ? " (" + loose + " with no shelf)" : "") +
       ". For shelves, paste this into Setup → Import; for sale items, into Sale stock → Import from PDA.";
+  const withPhoto = parcels.filter(r => photoUrl[r.code]).length;
+  if(withPhoto) $("#exportNote").textContent += " " + (withPhoto === 1 ? "1 of them has a photo" : withPhoto + " of them have a photo") +
+    ": to send the photos too, press Save with photos.";
+  $("#photoActions").hidden = !withPhoto;
   $("#csv").value = csv();
   $("#exportDlg").showModal();
 });
@@ -411,15 +587,58 @@ $("#downloadBtn").addEventListener("click", () => {
   }
 });
 
+/* One file with the scans and their photos (as data inside the file), for
+   Sale stock → Import from PDA in the warehouse app. */
+function blobToDataUrl(b){
+  return new Promise(function(res, rej){
+    const fr = new FileReader();
+    fr.onload = function(){ res(fr.result); };
+    fr.onerror = function(){ rej(fr.error); };
+    fr.readAsDataURL(b);
+  });
+}
+$("#photoSaveBtn").addEventListener("click", function(){
+  const btn = this;
+  btn.disabled = true; btn.textContent = "Preparing…";
+  const parcels = state.rows.filter(r => r.k === "p").slice().reverse();
+  allPhotos().then(function(all){
+    return Promise.all(parcels.map(function(r){
+      const b = all[r.code];
+      return (b ? blobToDataUrl(b) : Promise.resolve(null)).then(function(photo){
+        const o = { barcode: r.code, shelf: r.shelf || "", scanned_at: new Date(r.t).toISOString() };
+        if(photo) o.photo = photo;
+        return o;
+      });
+    }));
+  }).then(function(rows){
+    const file = JSON.stringify({ kind: "pda-scans", version: 1, exported_at: new Date().toISOString(), rows: rows });
+    const blob = new Blob([file], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "sale-scans-" + new Date().toISOString().slice(0,10) + ".json";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 8000);
+    toast("Saved: " + rows.length + " parcels, " + rows.filter(r => r.photo).length + " photos");
+  }).catch(function(e){
+    toast("Saving failed: " + ((e && e.message) || e));
+  }).then(function(){
+    btn.disabled = false; btn.textContent = "Save with photos";
+  });
+});
+
 let armed = false;
 $("#clearBtn").addEventListener("click", function(){
   if(!armed){
     armed = true;
-    this.textContent = "Tap again to erase everything";
+    this.textContent = "Tap again to erase all scans and photos";
     setTimeout(() => { armed = false; this.textContent = "Clear all scans"; }, 4000);
     return;
   }
-  state = { shelf:"", rows:[], dupes:0 };
+  const keepPhotoMode = !!state.photoOn;
+  state = { shelf:"", rows:[], dupes:0, photoOn: keepPhotoMode };
+  for(const k in photoUrl){ URL.revokeObjectURL(photoUrl[k]); delete photoUrl[k]; }
+  photoTx("readwrite", function(st){ st.clear(); }).catch(function(){});
   save(); render();
   armed = false;
   this.textContent = "Clear all scans";
