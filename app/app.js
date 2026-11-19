@@ -5857,11 +5857,127 @@ async function loadHamra(quiet) {
     if (!quiet) { toast("Could not load Hamra clients — " + error.message, "bad"); render(); }
     return;
   }
+  if (!quiet || S.tab === "hamra") loadHamraMoney();
   const before = S.hamra ? S.hamra.waiting_count : null;
   S.hamra = data || { waiting: [], waiting_count: 0, clients: [], suggestions: [] };
   if (!quiet || S.tab === "hamra" || before !== S.hamra.waiting_count) {
     if (S.tab !== "scan" || before !== S.hamra.waiting_count) render();
   }
+}
+
+/* What is at the Hamra office now: parcels at the branch and shipments filed
+   in a branch zone that are not delivered yet, with what is owed and paid. */
+async function loadHamraMoney() {
+  const zones = branchZones().map(z => z.code);
+  const pq = [];
+  for (let from = 0; from < 20000; from += 1000) {
+    const { data, error } = await S.sb.from("parcels_view")
+      .select("barcode,client_id,customer,phone,cost,paid")
+      .eq("status", "at_branch").order("barcode").range(from, from + 999);
+    if (error) { toast("Could not add up Hamra — " + error.message, "bad"); return; }
+    pq.push(...(data || []));
+    if (!data || data.length < 1000) break;
+  }
+  let ships = [];
+  if (zones.length) {
+    const { data, error } = await S.sb.from("shipments")
+      .select("ship_num,client,total,paid_amount,paid_at,delivered_at,zone")
+      .in("zone", zones).is("delivered_at", null).limit(1000);
+    if (!error) ships = data || [];
+  }
+  S.hamraMoney = { parcels: pq, ships };
+  if (S.tab === "hamra") render();
+}
+
+function hamraTotals() {
+  const box = el("div");
+  box.style.marginBottom = "16px";
+  const m = S.hamraMoney;
+  if (!m) {
+    box.append(el("div", "li-s", "Adding up what is at Hamra…"));
+    return box;
+  }
+  const sum = (a, f) => a.reduce((s, x) => s + (Number(f(x)) || 0), 0);
+  const unpaidP = m.parcels.filter(p => !p.paid), paidP = m.parcels.filter(p => p.paid);
+  const shipOwed = s => Math.max(0, (Number(s.total) || 0) - (Number(s.paid_amount) || 0));
+  const unpaidS = m.ships.filter(s => !s.paid_at || shipOwed(s) > 0.005);
+  const owed = sum(unpaidP, p => p.cost) + sum(unpaidS, shipOwed);
+  const paid = sum(paidP, p => p.cost) + sum(m.ships, s => s.paid_amount);
+  const tiles = el("div", "tiles");
+  const tile = (k, val, note, colour, go) => {
+    const d = el(go ? "button" : "div", "tile");
+    if (go) { d.type = "button"; d.onclick = go; }
+    d.append(el("div", "k", k));
+    const b = el("div", "v", val);
+    if (colour) b.style.color = colour;
+    d.append(b);
+    if (note) d.append(el("div", "n", note));
+    return d;
+  };
+  const toStockAtBranch = paidFilter => () => {
+    S.filters = { status: "at_branch", zone: "", paid: paidFilter || "", here: false, client: "" };
+    S.q = ""; S.bulk = null; S.tab = "stock"; applyFilters();
+  };
+  tiles.append(
+    tile("At Hamra now", nf0.format(m.parcels.length + m.ships.length),
+      nf0.format(m.parcels.length) + " parcels · " + nf0.format(m.ships.length) + " shipments", null, toStockAtBranch("")),
+    tile("To collect at Hamra", money(owed),
+      nf0.format(unpaidP.length) + " unpaid parcels · " + nf0.format(unpaidS.length) + " shipments", "var(--danger)",
+      toStockAtBranch("unpaid")),
+    tile("Already paid", money(paid), nf0.format(paidP.length) + " parcels · " +
+      nf0.format(m.ships.length - unpaidS.length) + " shipments", "var(--ok)"),
+    tile("Clients at Hamra", nf0.format(new Set(m.parcels.map(p => p.client_id || p.barcode)).size +
+      new Set(m.ships.map(s => s.client)).size), "with something waiting"),
+  );
+  box.append(tiles);
+
+  /* who owes what at Hamra, biggest first */
+  const by = new Map();
+  for (const p of m.parcels) {
+    const k = "c:" + (p.client_id || p.barcode);
+    if (!by.has(k)) by.set(k, { name: p.customer || p.client_id || p.barcode, id: p.client_id, phone: p.phone, n: 0, owed: 0, total: 0 });
+    const g = by.get(k); g.n++; g.total += Number(p.cost) || 0; if (!p.paid) g.owed += Number(p.cost) || 0;
+  }
+  for (const s of m.ships) {
+    const k = "s:" + (s.client || s.ship_num);
+    if (!by.has(k)) by.set(k, { name: (s.client || "Shipment") + " (shipping)", id: null, phone: null, n: 0, owed: 0, total: 0 });
+    const g = by.get(k); g.n++; g.total += Number(s.total) || 0; g.owed += shipOwed(s);
+  }
+  const groups = [...by.values()].sort((a, b) => b.owed - a.owed || b.n - a.n);
+  if (groups.length) {
+    const tg = el("button", "btn sm", S.hamraListOpen ? "Hide clients at Hamra" : "Show the " + nf0.format(groups.length) + " clients at Hamra");
+    tg.style.marginTop = "8px";
+    tg.onclick = () => { S.hamraListOpen = !S.hamraListOpen; render(); };
+    box.append(tg);
+    if (S.hamraListOpen) {
+      const list = el("div", "list");
+      list.style.marginTop = "8px";
+      for (const g of groups) {
+        const li = el("div", "li" + (g.id ? " click" : ""));
+        if (g.id) li.onclick = () => {
+          S.filters = { status: "at_branch", zone: "", paid: "", here: false, client: g.id };
+          S.q = ""; S.bulk = null; S.tab = "stock"; applyFilters();
+        };
+        const mm = el("div", "li-m");
+        const nm = el("div", "li-nm");
+        nm.append(el("span", null, g.name));
+        if (g.id) nm.append(el("span", "chip", g.id));
+        nm.append(el("span", "chip", nf0.format(g.n)));
+        mm.append(nm);
+        if (g.phone) mm.append(el("div", "li-s", g.phone));
+        li.append(mm);
+        const a = el("div", "li-a");
+        const c = el("span", "mono num", money(g.owed));
+        c.style.fontWeight = "700";
+        c.style.color = g.owed > 0 ? "var(--danger)" : "var(--ok)";
+        a.append(c);
+        li.append(a);
+        list.append(li);
+      }
+      box.append(list);
+    }
+  }
+  return box;
 }
 
 async function setHamraClient(client_id, customer, state) {
@@ -5996,6 +6112,7 @@ function vHamra() {
   v.append(head);
 
   if (S.push == null) refreshPushState();
+  v.append(hamraTotals());
   v.append(hamraPushCard());
 
   const d = S.hamra;
