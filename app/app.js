@@ -6239,6 +6239,7 @@ function vWaseet() {
     e.append(document.createTextNode("Release parcels or send shipments to Waseet for delivery."));
     v.append(e);
     v.append(waseetPaySection());
+    v.append(waseetProfitSection());
     return v;
   }
 
@@ -6276,14 +6277,18 @@ function vWaseet() {
   const filtered = !!(S.waseetQ.trim() || S.waseetDate || S.bulk);
   const paidIn = (S.waseetPays || []).reduce((s, p) => s + (Number(p.amount) || 0), 0);
   if (!filtered && S.waseetOwedAll) { totalOwed = S.waseetOwedAll.sum; unpaidCount = S.waseetOwedAll.n; }
-  const gross = totalOwed + shipOwed;
+  /* the $1 per order is owed by Waseet too */
+  let profit = 0;
+  for (const orders of waseetOrders().days.values()) profit += orders.size * WASEET_PROFIT_PER_ORDER;
+  const gross = totalOwed + shipOwed + profit;
   const net = +(gross - paidIn).toFixed(2);
   tiles.append(
     filtered
-      ? tile("Collect from Waseet", money(gross),
+      ? tile("Collect from Waseet", money(gross - profit),
           "this filter only · before payments", "var(--danger)")
       : tile(net < 0 ? "Waseet credit" : "Collect from Waseet", money(Math.abs(net)),
-          money(gross) + " owed − " + money(paidIn) + " paid", net < 0 ? "var(--ok)" : "var(--danger)"),
+          money(gross - profit) + " owed" + (profit ? " + " + money(profit) + " profit" : "") +
+          " − " + money(paidIn) + " paid", net < 0 ? "var(--ok)" : "var(--danger)"),
     tile("Paid by Waseet", money(paidIn),
       nf0.format((S.waseetPays || []).length) + " payments", "var(--ok)"),
     tile("Already paid direct", money(totalPaid + shipPaidAmt), "client paid — not with Waseet", "var(--ok)"),
@@ -6293,6 +6298,7 @@ function vWaseet() {
   );
   v.append(tiles);
   v.append(waseetPaySection());
+  v.append(waseetProfitSection());
 
   /* select all / clear */
   const selBar = el("div", "row");
@@ -6503,7 +6509,14 @@ async function loadWaseet() {
     .order("paid_on", { ascending: false }).order("id", { ascending: false }).limit(1000);
   /* the list shows at most 500 parcels; the balance needs every unpaid one */
   const owedQ = S.sb.from("parcels_view").select("cost").eq("status", "released").eq("paid", false).limit(5000);
-  const [pRes, sRes, wRes, oRes] = await Promise.all([qy.limit(500), sq.limit(200), payQ, owedQ]);
+  const sendQ = S.sb.from("waseet_sends").select("sent_on,kind,ref,client_key")
+    .eq("active", true).gte("sent_on", WASEET_PROFIT_FROM).order("sent_on", { ascending: false }).limit(20000);
+  const [pRes, sRes, wRes, oRes, xRes] = await Promise.all([qy.limit(500), sq.limit(200), payQ, owedQ, sendQ]);
+  S.waseetSends = xRes.error ? null : (xRes.data || []);
+  if (xRes.error) toast("Could not load the Waseet profit — " + xRes.error.message, "bad");
+  /* 1941515's orders are its quotations, which only the quotation sheet knows */
+  if (S.waseetSends && S.waseetSends.some(x => x.kind === "parcel" && x.client_key === SALES_CLIENT) && !S.soSheet)
+    await loadSoSheet();
   S.waseetPays = wRes.error ? [] : (wRes.data || []);
   S.waseetOwedAll = oRes.error ? null
     : { sum: (oRes.data || []).reduce((s, r) => s + (Number(r.cost) || 0), 0), n: (oRes.data || []).length };
@@ -6513,6 +6526,108 @@ async function loadWaseet() {
   S.waseetData = pRes.data || [];
   S.waseetShips = sRes.data || [];
   render();
+}
+
+/* Waseet profit: $1 per order sent to Waseet, counted from this day on.
+   One order = one client on one day (however many parcels); for 1941515, one
+   quotation on one day; for shipping, one shipping client on one day. Sends
+   taken back out of Waseet are not counted (the database drops them). */
+const WASEET_PROFIT_FROM = "2026-11-20";
+const WASEET_PROFIT_PER_ORDER = 1;
+
+function waseetOrders() {
+  const days = new Map();   /* day -> Map(orderKey -> {type, label, n}) */
+  let noQs = 0;
+  for (const x of S.waseetSends || []) {
+    let type, key, label;
+    if (x.kind === "ship") { type = "ship"; key = "ship:" + soKey(x.client_key); label = x.client_key || "Shipment " + x.ref; }
+    else if (x.client_key === SALES_CLIENT) {
+      const sl = S.soSheet && S.soSheet.byCode.get(soKey(x.ref));
+      type = "qs";
+      if (sl && sl.q) { key = "qs:" + sl.q; label = sl.q; }
+      else { key = "qsp:" + soKey(x.ref); label = x.ref + " (not on the sheet)"; noQs++; }
+    } else { type = "client"; key = "c:" + (x.client_key || x.ref); label = x.client_key || x.ref; }
+    if (!days.has(x.sent_on)) days.set(x.sent_on, new Map());
+    const d = days.get(x.sent_on);
+    if (!d.has(key)) d.set(key, { type, label, n: 0 });
+    d.get(key).n++;
+  }
+  return { days, noQs };
+}
+
+function waseetProfitSection() {
+  const box = el("div");
+  box.style.margin = "4px 0 18px";
+  const ttl = el("h3", null, "Profit");
+  ttl.style.margin = "0 0 4px";
+  box.append(ttl);
+  box.append(el("div", "li-s", money(WASEET_PROFIT_PER_ORDER) + " per order sent to Waseet, from " +
+    fmtDate(WASEET_PROFIT_FROM) + ". One order is one client a day, one 1941515 quotation a day, or one shipping client a day."));
+  if (!S.waseetSends) return box;
+  const { days, noQs } = waseetOrders();
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Beirut" });
+  const month = today.slice(0, 7);
+  let total = 0, mon = 0, tod = 0;
+  for (const [day, orders] of days) {
+    total += orders.size;
+    if (day.slice(0, 7) === month) mon += orders.size;
+    if (day === today) tod += orders.size;
+  }
+  const P = n => money(n * WASEET_PROFIT_PER_ORDER);
+  const tiles = el("div", "tiles");
+  tiles.style.marginTop = "10px";
+  const tile = (k, val, note) => {
+    const d = el("div", "tile");
+    d.append(el("div", "k", k));
+    const b = el("div", "v", val); b.style.color = "var(--ok)";
+    d.append(b);
+    if (note) d.append(el("div", "n", note));
+    return d;
+  };
+  tiles.append(
+    tile("Profit today", P(tod), nf0.format(tod) + " orders"),
+    tile("This month", P(mon), nf0.format(mon) + " orders"),
+    tile("Total profit", P(total), nf0.format(total) + " orders since " + fmtDate(WASEET_PROFIT_FROM)),
+  );
+  box.append(tiles);
+  if (WASEET_PROFIT_FROM > today) {
+    box.append(el("div", "li-s", "Counting starts on " + fmtDate(WASEET_PROFIT_FROM) + "."));
+    return box;
+  }
+  if (noQs) {
+    const w = el("div", "li-s", nf0.format(noQs) + " parcel(s) of " + SALES_CLIENT +
+      " are not on the quotation sheet yet, so each counts as its own order until it is added.");
+    w.style.color = "var(--warn)";
+    box.append(w);
+  }
+  const list = el("div", "list");
+  for (const [day, orders] of [...days].slice(0, 31)) {
+    const c = { client: 0, qs: 0, ship: 0 };
+    for (const o of orders.values()) c[o.type]++;
+    const li = el("div", "li click");
+    const m = el("div", "li-m");
+    m.append(el("div", "li-nm", fmtDate(day)));
+    const bits = [];
+    if (c.client) bits.push(nf0.format(c.client) + " clients");
+    if (c.qs) bits.push(nf0.format(c.qs) + " quotations");
+    if (c.ship) bits.push(nf0.format(c.ship) + " shipping clients");
+    m.append(el("div", "li-s", bits.join("  ·  ")));
+    const det = el("div", "li-s");
+    det.style.display = S.waseetProfitOpen === day ? "block" : "none";
+    det.style.marginTop = "6px";
+    det.textContent = [...orders.values()].map(o => o.label + (o.n > 1 ? " (" + o.n + ")" : "")).join(", ");
+    m.append(det);
+    li.append(m);
+    const a = el("div", "li-a");
+    const v = el("span", "mono num", P(orders.size));
+    v.style.fontWeight = "700"; v.style.color = "var(--ok)";
+    a.append(v);
+    li.append(a);
+    li.onclick = () => { S.waseetProfitOpen = S.waseetProfitOpen === day ? null : day; render(); };
+    list.append(li);
+  }
+  if (days.size) box.append(list);
+  return box;
 }
 
 /* Cash Waseet handed over. Each payment is deducted from the
