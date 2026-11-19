@@ -131,6 +131,7 @@ const S = {
   /* waseet */
   waseetData: null,
   waseetShips: null,
+  waseetPays: null,
   waseetDate: "",
   waseetSort: "desc",
   waseetSel: new Set(),
@@ -6048,6 +6049,7 @@ function vWaseet() {
     e.append(el("b", null, "Nothing with Waseet"));
     e.append(document.createTextNode("Release parcels or send shipments to Waseet for delivery."));
     v.append(e);
+    v.append(waseetPaySection());
     return v;
   }
 
@@ -6080,15 +6082,28 @@ function vWaseet() {
   const orderIds = new Set();
   for (const r of rows) if (r.client_id) orderIds.add(r.client_id);
   for (const s of wShips) orderIds.add("ship-" + s.ship_num);
+  /* Payments are deducted only from the full list; a search or date filter
+     shows part of it, so there the total stays before payments. */
+  const filtered = !!(S.waseetQ.trim() || S.waseetDate || S.bulk);
+  const paidIn = (S.waseetPays || []).reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  if (!filtered && S.waseetOwedAll) { totalOwed = S.waseetOwedAll.sum; unpaidCount = S.waseetOwedAll.n; }
+  const gross = totalOwed + shipOwed;
+  const net = +(gross - paidIn).toFixed(2);
   tiles.append(
-    tile("Collect from Waseet", money(totalOwed + shipOwed),
-      nf0.format(unpaidCount) + " parcels + " + nf0.format(shipUnpaid) + " shipments", "var(--danger)"),
+    filtered
+      ? tile("Collect from Waseet", money(gross),
+          "this filter only · before payments", "var(--danger)")
+      : tile(net < 0 ? "Waseet credit" : "Collect from Waseet", money(Math.abs(net)),
+          money(gross) + " owed − " + money(paidIn) + " paid", net < 0 ? "var(--ok)" : "var(--danger)"),
+    tile("Paid by Waseet", money(paidIn),
+      nf0.format((S.waseetPays || []).length) + " payments", "var(--ok)"),
     tile("Already paid direct", money(totalPaid + shipPaidAmt), "client paid — not with Waseet", "var(--ok)"),
     tile("Total Orders", nf0.format(orderIds.size), "unique clients + shipments"),
     tile("Total with Waseet", nf0.format(rows.length + wShips.length),
       nf0.format(rows.length) + " parcels · " + nf0.format(wShips.length) + " shipments"),
   );
   v.append(tiles);
+  v.append(waseetPaySection());
 
   /* select all / clear */
   const selBar = el("div", "row");
@@ -6295,12 +6310,155 @@ async function loadWaseet() {
   }
   sq = sq.order("total", { ascending: S.waseetSort === "asc" });
 
-  const [pRes, sRes] = await Promise.all([qy.limit(500), sq.limit(200)]);
+  const payQ = S.sb.from("waseet_payments").select("id,paid_on,amount,note,created_at")
+    .order("paid_on", { ascending: false }).order("id", { ascending: false }).limit(1000);
+  /* the list shows at most 500 parcels; the balance needs every unpaid one */
+  const owedQ = S.sb.from("parcels_view").select("cost").eq("status", "released").eq("paid", false).limit(5000);
+  const [pRes, sRes, wRes, oRes] = await Promise.all([qy.limit(500), sq.limit(200), payQ, owedQ]);
+  S.waseetPays = wRes.error ? [] : (wRes.data || []);
+  S.waseetOwedAll = oRes.error ? null
+    : { sum: (oRes.data || []).reduce((s, r) => s + (Number(r.cost) || 0), 0), n: (oRes.data || []).length };
+  if (wRes.error) toast("Could not load Waseet payments — " + wRes.error.message, "bad");
   if (pRes.error) { toast(pRes.error.message, "bad"); S.waseetData = []; S.waseetShips = []; render(); return; }
   if (sRes.error) { toast(sRes.error.message, "bad"); }
   S.waseetData = pRes.data || [];
   S.waseetShips = sRes.data || [];
   render();
+}
+
+/* Cash Waseet handed over. Each payment is deducted from the
+   "Collect from Waseet" total; parcels and shipments are not touched. */
+function waseetPaySection() {
+  const pays = S.waseetPays || [];
+  const box = el("div");
+  box.style.margin = "4px 0 18px";
+  const hd = el("div", "row");
+  hd.style.alignItems = "center"; hd.style.gap = "8px"; hd.style.flexWrap = "wrap";
+  hd.style.marginBottom = "8px";
+  const ttl = el("h3", null, "Payments from Waseet");
+  ttl.style.margin = "0"; ttl.style.flex = "1 1 auto";
+  hd.append(ttl);
+  const add = el("button", "btn pri sm", "+ Add payment");
+  add.onclick = () => askWaseetPayment();
+  hd.append(add);
+  box.append(hd);
+  if (!pays.length) {
+    box.append(el("div", "li-s", "No payments recorded yet. Add one when Waseet pays you cash."));
+    return box;
+  }
+  const list = el("div", "list");
+  const shown = S.waseetPaysAll ? pays : pays.slice(0, 8);
+  for (const p of shown) {
+    const li = el("div", "li");
+    const m = el("div", "li-m");
+    const nm = el("div", "li-nm");
+    nm.append(el("span", null, fmtDate(p.paid_on)));
+    m.append(nm);
+    if (p.note) m.append(el("div", "li-s", p.note));
+    li.append(m);
+    const a = el("div", "li-a");
+    const amt = el("span", "mono num", "− " + money(p.amount));
+    amt.style.fontWeight = "700"; amt.style.color = "var(--ok)";
+    a.append(amt);
+    const ed = el("button", "btn sm", "Edit");
+    ed.style.fontSize = "11px";
+    ed.onclick = () => askWaseetPayment(p);
+    a.append(ed);
+    li.append(a);
+    list.append(li);
+  }
+  box.append(list);
+  if (pays.length > 8) {
+    const more = el("button", "btn sm", S.waseetPaysAll ? "Show fewer" : "Show all " + nf0.format(pays.length));
+    more.style.marginTop = "6px";
+    more.onclick = () => { S.waseetPaysAll = !S.waseetPaysAll; render(); };
+    box.append(more);
+  }
+  return box;
+}
+
+function askWaseetPayment(p) {
+  const editing = !!p;
+  const scrim = el("div", "scrim");
+  const m = el("form", "modal");
+  m.append(el("h3", null, editing ? "Edit Waseet payment" : "Payment from Waseet"));
+  const sub = el("p", "sub", "The amount is deducted from what Waseet owes you. Parcels and shipments stay as they are.");
+  sub.style.margin = "4px 0 16px";
+  m.append(sub);
+  const err = el("div");
+  m.append(err);
+
+  const fA = el("label", "field");
+  fA.append(el("span", null, "Amount (USD)"));
+  const amt = el("input", "inp");
+  amt.type = "number"; amt.step = "0.01"; amt.min = "0.01"; amt.required = true;
+  amt.inputMode = "decimal";
+  if (editing) amt.value = Number(p.amount);
+  fA.append(amt);
+  m.append(fA);
+
+  const fD = el("label", "field");
+  fD.append(el("span", null, "Date paid"));
+  const dt = el("input", "inp");
+  dt.type = "date"; dt.required = true;
+  dt.value = editing ? p.paid_on : new Date().toISOString().slice(0, 10);
+  fD.append(dt);
+  m.append(fD);
+
+  const fN = el("label", "field");
+  fN.append(el("span", null, "Note (optional)"));
+  const note = el("input", "inp");
+  note.placeholder = "e.g. cash, who brought it";
+  if (editing && p.note) note.value = p.note;
+  fN.append(note);
+  m.append(fN);
+
+  const acts = el("div", "row");
+  acts.style.flexWrap = "wrap";
+  const go = el("button", "btn pri", editing ? "Save" : "Add payment");
+  go.type = "submit";
+  const no = el("button", "btn", "Cancel");
+  no.type = "button";
+  no.onclick = () => scrim.remove();
+  acts.append(go, no);
+  if (editing) {
+    let armed = false;
+    const del = el("button", "btn dng", "Delete");
+    del.type = "button";
+    del.onclick = async () => {
+      if (!armed) { armed = true; del.textContent = "Tap again to delete"; return; }
+      del.disabled = true;
+      const { error } = await S.sb.from("waseet_payments").delete().eq("id", p.id);
+      if (error) { err.replaceChildren(banner("bad", "Could not delete it", error.message)); del.disabled = false; return; }
+      scrim.remove();
+      toast("Payment deleted", "ok");
+      loadWaseet();
+    };
+    acts.append(del);
+  }
+  m.append(acts);
+
+  m.addEventListener("submit", async ev => {
+    ev.preventDefault();
+    const a = Math.round(Number(amt.value) * 100) / 100;
+    if (!(a > 0)) { err.replaceChildren(banner("bad", "Enter an amount above zero", "")); return; }
+    if (!dt.value) { err.replaceChildren(banner("bad", "Pick the date it was paid", "")); return; }
+    go.disabled = true;
+    const row = { amount: a, paid_on: dt.value, note: note.value.trim() || null };
+    const q = editing
+      ? S.sb.from("waseet_payments").update(row).eq("id", p.id)
+      : S.sb.from("waseet_payments").insert(row);
+    const { error } = await q;
+    if (error) { err.replaceChildren(banner("bad", "Could not save it", error.message)); go.disabled = false; return; }
+    scrim.remove();
+    toast((editing ? "Payment saved · " : "Payment added · ") + money(a), "ok");
+    loadWaseet();
+  });
+
+  scrim.append(m);
+  scrim.addEventListener("click", e => { if (e.target === scrim) scrim.remove(); });
+  document.body.append(scrim);
+  setTimeout(() => amt.focus(), 50);
 }
 
 async function waseetRemoveSelected() {
