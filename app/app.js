@@ -1906,7 +1906,8 @@ function bulkStrip() {
   b.onclick = askBulkSearch;
   r.append(b);
   if (S.bulk) {
-    r.append(el("span", "chip admin", "showing only " + nf0.format(S.bulk.codes.length) + " searched barcodes"));
+    r.append(el("span", "chip admin", "showing only " + (S.bulk.label ? S.bulk.label + " · " : "") +
+      nf0.format(S.bulk.codes.length) + " searched barcodes"));
     const c = el("button", "btn sm", "Clear bulk search");
     c.type = "button";
     c.onclick = () => setBulk(null);
@@ -2109,7 +2110,8 @@ function stockFilters() {
   }
 
   if (S.bulk) {
-    const chip = el("span", "chip admin", nf0.format(S.bulk.codes.length) + " barcodes");
+    const chip = el("span", "chip admin", (S.bulk.label ? S.bulk.label + " · " : "") +
+      nf0.format(S.bulk.codes.length) + (S.bulk.label ? (S.bulk.codes.length === 1 ? " parcel" : " parcels") : " barcodes"));
     bar.append(chip);
   }
 
@@ -2132,11 +2134,35 @@ function stockFilters() {
     };
     bar.append(clr);
   }
-  bar.addEventListener("submit", ev => {
+  bar.addEventListener("submit", async ev => {
     ev.preventDefault();
+    /* A quotation or ST order number is not on the parcel: the quotation
+       sheet says which parcels it covers, and those are shown. */
+    const term = soKey(q.value);
+    if (/^(QS|ST|DG)\d{6,}/.test(term)) {
+      go.disabled = true;
+      await loadSoSheet();
+      go.disabled = false;
+      if (S.soSheetErr) { toast("Could not read the quotation sheet — " + S.soSheetErr, "bad"); return; }
+      const codes = soCodesFor(term);
+      if (!codes.length) { toast(term + " is not on the quotation sheet", "bad"); return; }
+      S.q = "";
+      setBulk(codes);
+      S.bulk.label = term;
+      toast(term + " · " + nf0.format(codes.length) + (codes.length === 1 ? " parcel" : " parcels") + " on the sheet", "ok");
+      return;
+    }
     S.q = q.value; applyFilters();
   });
   return bar;
+}
+
+/* The parcels a quotation or ST order covers, from the quotation sheet. */
+function soCodesFor(term) {
+  if (!S.soSheet) return [];
+  const t = soKey(term);
+  const hit = S.soSheet.rows.filter(x => x.b && (x.q === t || x.st === t || x.st.startsWith(t + "-")));
+  return [...new Set(hit.map(x => x.b))];
 }
 
 function pager() {
