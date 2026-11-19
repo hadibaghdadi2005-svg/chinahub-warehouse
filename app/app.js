@@ -4947,33 +4947,36 @@ async function loadSummary() {
     if (toNext) qy = qy.lt(col, toNext);
     return qy;
   };
-  const promises = [];
-
-  let appQy = S.sb.from("parcels_view")
-    .select("cost,paid", { count: "exact" })
-    .not("status", "in", "(expected)");
-  appQy = inRange(appQy, "shipped_at");
-  promises.push(appQy);
-
-  let shipQy = S.sb.from("shipments")
-    .select("total,paid_amount,paid_at,arrived_at");
-  shipQy = inRange(shipQy, "arrived_at");
-  promises.push(shipQy);
-
+  /* The server hands back at most 1,000 rows per request, so read every
+     page — otherwise the totals silently stop at the first 1,000 parcels. */
+  const allRows = async (make, order) => {
+    const out = [];
+    for (let from = 0; from < 200000; from += 1000) {
+      const { data, error } = await make().order(order).range(from, from + 999);
+      if (error) throw error;
+      out.push(...(data || []));
+      if (!data || data.length < 1000) break;
+    }
+    return out;
+  };
+  const appQy = () => inRange(S.sb.from("parcels_view").select("barcode,client_id,cost,paid")
+    .not("status", "in", "(expected)"), "shipped_at");
+  const shipQy = () => inRange(S.sb.from("shipments")
+    .select("ship_num,client,total,paid_amount,paid_at,arrived_at"), "arrived_at");
   let rcvQy = S.sb.from("parcels_view")
-    .select("barcode", { count: "exact" })
+    .select("barcode", { count: "exact", head: true })
     .in("status", ["received", "shelved", "at_branch", "released"]);
   rcvQy = inRange(rcvQy, "shipped_at");
-  promises.push(rcvQy);
 
   try {
-    const [appRes, shipRes, rcvRes] = await Promise.all([appQy, shipQy, rcvQy]);
-    const appRows = appRes.data || [];
-    const shipRows = shipRes.data || [];
+    const [appRows, shipRows, rcvRes] = await Promise.all([
+      allRows(appQy, "barcode"), allRows(shipQy, "ship_num"), rcvQy]);
+    if (rcvRes.error) throw rcvRes.error;
 
     let appOwed = 0, appCollected = 0, appUnpaid = 0, appCustomers = new Set();
     for (const r of appRows) {
       const c = Number(r.cost) || 0;
+      appCustomers.add(r.client_id || r.barcode);
       if (r.paid) appCollected += c;
       else { appOwed += c; appUnpaid++; }
     }
@@ -4981,15 +4984,16 @@ async function loadSummary() {
     let shipOutstanding = 0, shipCollected = 0, shipUnpaid = 0, shipClients = new Set();
     for (const r of shipRows) {
       const t = Number(r.total) || 0, p = Number(r.paid_amount) || 0;
+      shipClients.add(r.client || r.ship_num);
       if (r.paid_at) shipCollected += p;
       else { shipOutstanding += +(t - p).toFixed(2); shipUnpaid++; }
     }
 
     S.summaryData = {
       app_owed: appOwed, app_collected: appCollected,
-      app_unpaid_count: appUnpaid, app_customers: appRows.length,
+      app_unpaid_count: appUnpaid, app_customers: appCustomers.size,
       ship_outstanding: shipOutstanding, ship_collected: shipCollected,
-      ship_unpaid_count: shipUnpaid, ship_clients: shipRows.length,
+      ship_unpaid_count: shipUnpaid, ship_clients: shipClients.size,
       received_count: rcvRes.count || 0,
     };
   } catch (e) {
