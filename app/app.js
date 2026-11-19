@@ -3093,9 +3093,73 @@ const SALES_CLIENT = "1941515";
 const SALES_COLS = "barcode,name,customer,phone,shipment,status,zone,shelf,qty,weight_kg,cbm," +
   "route,cost,cny,paid,paid_at,pay_method,shipped_at,received_at,delivered_at,age_days";
 
+/* The quotation sheet (Google Sheets, MAIN_DATA tab), read live: each row is a
+   quotation number, a parcel number and its ST order number, plus whether it
+   was taken out. It must stay shared as "anyone with the link can view". */
+const SO_SHEET_ID = "13b20w24g8lhbdnJ-u_CFhRLxVPl8YXN0IIPFihiJZ9o";
+const SO_SHEET_GID = "0";
+const soKey = s => String(s == null ? "" : s).trim().toUpperCase().replace(/\.0$/, "");
+
+/* Strict comma CSV (Google's export): quotes only around cells that need them. */
+function parseSheetCsv(text) {
+  const rows = []; let row = [], cell = "", q = false;
+  const t = String(text).replace(/\r\n?/g, "\n");
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    if (q) {
+      if (ch === '"') { if (t[i + 1] === '"') { cell += '"'; i++; } else q = false; }
+      else cell += ch;
+    } else if (ch === '"') q = true;
+    else if (ch === ",") { row.push(cell); cell = ""; }
+    else if (ch === "\n") { row.push(cell); rows.push(row); row = []; cell = ""; }
+    else cell += ch;
+  }
+  if (cell || row.length) { row.push(cell); rows.push(row); }
+  return rows;
+}
+
+async function loadSoSheet() {
+  S.soSheetBusy = true;
+  try {
+    const url = "https://docs.google.com/spreadsheets/d/" + SO_SHEET_ID +
+      "/export?format=csv&gid=" + SO_SHEET_GID + "&t=" + Date.now();
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) throw new Error("the sheet answered " + res.status);
+    const text = await res.text();
+    if (/^\s*</.test(text)) throw new Error("the sheet is not shared — set it to anyone with the link");
+    const all = parseSheetCsv(text);
+    const head = (all[0] || []).map(x => String(x).trim().toUpperCase());
+    const col = (name, fb) => { const i = head.indexOf(name); return i >= 0 ? i : fb; };
+    const cQ = col("QUOTATION", 0), cB = col("PARCELS NO", 1), cS = col("ST", 2),
+          cT = col("TAKEN", 5), cD = col("DATE TAKEN", 6), cDl = col("DELIVERY", 7), cH = col("HAMRA", 8);
+    if (head[cQ] !== "QUOTATION") throw new Error("the sheet's first column is no longer QUOTATION");
+    const rows = [], byCode = new Map();
+    for (const r of all.slice(1)) {
+      const b = soKey(r[cB]), q = soKey(r[cQ]);
+      if (!b && !q) continue;
+      const x = {
+        q, b, st: soKey(r[cS]),
+        taken: soKey(r[cT]) === "TRUE", takenOn: String(r[cD] || "").trim(),
+        delivery: soKey(r[cDl]) === "TRUE", hamra: soKey(r[cH]) === "TRUE",
+      };
+      rows.push(x);
+      if (b && !byCode.has(b)) byCode.set(b, x);
+    }
+    S.soSheet = { rows, byCode, at: new Date() };
+    S.soSheetErr = null;
+  } catch (e) {
+    S.soSheetErr = (e && e.message) || "could not read it";
+  }
+  S.soSheetBusy = false;
+}
+
+/* The sheet line for a parcel, if it has one. */
+const soLine = r => (S.soSheet && S.soSheet.byCode.get(soKey(r.barcode))) || null;
+
 async function loadSales() {
   S.soLoading = true; render();
   const rows = [];
+  const sheet = loadSoSheet();
   try {
     for (let from = 0; from < 50000; from += 1000) {
       const { data, error } = await S.sb.from("parcels_view").select(SALES_COLS)
@@ -3110,6 +3174,8 @@ async function loadSales() {
     toast("Could not load the sales orders — " + ((e && e.message) || "try again"), "bad");
     if (!S.soData) S.soData = [];
   }
+  await sheet;
+  if (S.soSheetErr) toast("Could not read the quotation sheet — " + S.soSheetErr, "bad");
   S.soLoading = false;
   render();
 }
@@ -3128,7 +3194,11 @@ function salesFiltered() {
     if (S.soPay === "late" && !(here(r) && (Number(r.age_days) || 0) > free)) return false;
     if (S.soPay === "long" && !(here(r) && (Number(r.age_days) || 0) >= long)) return false;
     if (S.soMonth && String(r.shipped_at || "").slice(0, 7) !== S.soMonth) return false;
-    if (term && ![r.barcode, r.name, r.shipment, r.shelf].some(v => String(v || "").toLowerCase().includes(term))) return false;
+    if (term) {
+      const sl = soLine(r);
+      const hay = [r.barcode, r.name, r.shipment, r.shelf, sl && sl.q, sl && sl.st];
+      if (!hay.some(v => String(v || "").toLowerCase().includes(term))) return false;
+    }
     return true;
   });
   const by = {
@@ -3166,9 +3236,24 @@ function vSales() {
       ["cost", "Charge (USD)"], ["cny", "Amount (CNY)"],
       [r => r.paid ? "Paid" : "Unpaid", "Payment"], ["pay_method", "Payment method"],
       [r => r.paid_at ? String(r.paid_at).slice(0, 10) : "", "Paid on"], ["age_days", "Days held"],
+      [r => (soLine(r) || {}).q || "", "Quotation"], [r => (soLine(r) || {}).st || "", "ST order"],
+      [r => { const s = soLine(r); return s ? (s.taken ? "Taken" + (s.takenOn ? " " + s.takenOn : "") : "Not taken") : ""; }, "Taken out (sheet)"],
     ], rows);
   });
   v.append(head);
+
+  /* where the quotation numbers come from, and whether that worked */
+  if (S.soSheetErr) {
+    v.append(banner("bad", "Could not read the quotation sheet", S.soSheetErr +
+      ". Searching by quotation or ST number will not work until it can be read."));
+  } else if (S.soSheet) {
+    const n = el("div", "li-s", "Quotation sheet read " +
+      S.soSheet.at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + " · " +
+      nf0.format(new Set(S.soSheet.rows.map(x => x.q).filter(Boolean)).size) + " quotations, " +
+      nf0.format(S.soSheet.rows.length) + " parcels. Search a quotation (QS…) or ST number.");
+    n.style.marginBottom = "10px";
+    v.append(n);
+  }
 
   if (!S.soData) {
     const e = el("div", "empty");
@@ -3207,6 +3292,8 @@ function vSales() {
   v.append(tiles);
   v.append(bulkStrip());
   v.append(salesFilters());
+  const qc = soQuotationCards();
+  if (qc) v.append(qc);
 
   if (S.soLoading) {
     const b = el("div", "sub2");
@@ -3281,7 +3368,7 @@ function salesFilters() {
   const bar = el("form", "row");
   bar.style.marginBottom = "14px";
   const q = el("input", "inp mono");
-  q.placeholder = "Barcode, item, shipment or shelf…";
+  q.placeholder = "Quotation (QS…), ST, barcode, item or shelf…";
   q.value = S.soQ;
   q.autocomplete = "off";
   q.style.flex = "1 1 220px";
@@ -3323,8 +3410,78 @@ function salesFilters() {
     clr.onclick = () => { S.soQ = ""; S.soStatus = ""; S.soPay = ""; S.soMonth = ""; S.soPage = 0; render(); };
     bar.append(clr);
   }
-  bar.addEventListener("submit", ev => { ev.preventDefault(); S.soQ = q.value; S.soPage = 0; render(); });
+  bar.addEventListener("submit", async ev => {
+    ev.preventDefault(); S.soQ = q.value; S.soPage = 0; render();
+    /* new quotations are typed into the sheet all day: read it again */
+    if (S.soQ.trim() && !S.soSheetBusy) {
+      await loadSoSheet();
+      if (S.soSheetErr) toast("Could not read the quotation sheet — " + S.soSheetErr, "bad");
+      render();
+    }
+  });
   return bar;
+}
+
+/* When the search is a quotation or ST number: one card per quotation with
+   its ST orders, what the warehouse has, the money, and what is not in the app. */
+function soQuotationCards() {
+  const term = soKey(S.soQ);
+  if (!term || !S.soSheet || term.length < 4) return null;
+  const lines = S.soSheet.rows.filter(x => x.q.includes(term) || x.st.includes(term) || x.b === term);
+  const qs = [...new Set(lines.map(x => x.q).filter(Boolean))];
+  if (!qs.length) {
+    if (/^(QS|ST)\d/.test(term)) {
+      const e = el("div", "empty");
+      e.append(el("b", null, "Not in the quotation sheet"));
+      e.append(document.createTextNode(term + " is not on the sheet yet. Add it there and search again."));
+      return e;
+    }
+    return null;
+  }
+  const box = el("div");
+  box.style.margin = "0 0 14px";
+  const byCode = new Map((S.soData || []).map(r => [soKey(r.barcode), r]));
+  for (const q of qs.slice(0, 10)) {
+    const ql = S.soSheet.rows.filter(x => x.q === q);
+    const inApp = ql.map(x => byCode.get(x.b)).filter(Boolean);
+    const missing = ql.filter(x => x.b && !byCode.has(x.b));
+    const sum = a => a.reduce((s, r) => s + (Number(r.cost) || 0), 0);
+    const paid = inApp.filter(r => r.paid), unpaid = inApp.filter(r => !r.paid);
+    const card = el("div", "card");
+    card.style.padding = "12px 14px"; card.style.marginBottom = "10px";
+    const t = el("div", "li-nm");
+    t.append(el("b", "mono", q), copyBtn(q));
+    t.append(el("span", "chip", nf0.format(ql.length) + (ql.length === 1 ? " parcel" : " parcels")));
+    const taken = ql.filter(x => x.taken).length;
+    t.append(el("span", "chip " + (taken === ql.length ? "s-delivered" : taken ? "s-at_branch" : "off"),
+      taken === ql.length ? "All taken out" : taken ? nf0.format(taken) + " taken out" : "Not taken out"));
+    card.append(t);
+    const sts = [...new Set(ql.map(x => x.st).filter(Boolean))];
+    if (sts.length) {
+      const s = el("div", "li-nm");
+      s.style.marginTop = "6px"; s.style.flexWrap = "wrap";
+      s.append(el("span", "li-s", "ST:"));
+      for (const st of sts) s.append(el("span", "chip mono", st));
+      card.append(s);
+    }
+    const mny = el("div", "li-s");
+    mny.style.marginTop = "8px";
+    mny.append(document.createTextNode(nf0.format(inApp.length) + " in the app · total " + money(sum(inApp)) + " · "));
+    const pd = el("b", null, "paid " + money(sum(paid))); pd.style.color = "var(--ok)";
+    const up = el("b", null, "unpaid " + money(sum(unpaid))); up.style.color = sum(unpaid) > 0 ? "var(--danger)" : "";
+    mny.append(pd, document.createTextNode(" · "), up);
+    card.append(mny);
+    if (missing.length) {
+      const ms = el("div", "li-s");
+      ms.style.marginTop = "6px"; ms.style.color = "var(--warn)";
+      ms.textContent = "Not in the app (" + nf0.format(missing.length) + "): " +
+        missing.map(x => x.b + (x.st ? " / " + x.st : "")).join(", ");
+      card.append(ms);
+    }
+    box.append(card);
+  }
+  if (qs.length > 10) box.append(el("div", "li-s", nf0.format(qs.length) + " quotations match — type more of the number to narrow it."));
+  return box;
 }
 
 function salesRow(r, rows) {
@@ -3352,6 +3509,12 @@ function salesRow(r, rows) {
   nm.append(el("span", "mono", r.barcode), copyBtn(r.barcode));
   nm.append(el("span", "chip s-" + r.status, STATUS[r.status] || r.status));
   m.append(nm);
+  const sl = soLine(r);
+  if (sl) {
+    if (sl.q) nm.append(el("span", "chip mono", sl.q));
+    if (sl.st) nm.append(el("span", "chip mono", sl.st));
+    if (sl.taken) nm.append(el("span", "chip s-delivered", "Taken" + (sl.takenOn ? " " + sl.takenOn : "")));
+  }
   const bits = [];
   if (r.name) bits.push(r.name.length > 48 ? r.name.slice(0, 48) + "…" : r.name);
   if (r.shipment) bits.push(r.shipment);
