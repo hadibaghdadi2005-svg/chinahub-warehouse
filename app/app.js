@@ -6396,22 +6396,28 @@ function vWaseet() {
   /* Payments are deducted only from the full list; a search or date filter
      shows part of it, so there the total stays before payments. */
   const filtered = !!(S.waseetQ.trim() || S.waseetDate || S.bulk);
-  const paidIn = (S.waseetPays || []).reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  /* A positive amount is cash Waseet paid (taken off the balance); a negative
+     one is an amount added to the balance with no order behind it. */
+  const realPays = (S.waseetPays || []).filter(p => Number(p.amount) > 0);
+  const paidIn = realPays.reduce((s, p) => s + Number(p.amount), 0);
+  const added = (S.waseetPays || []).reduce((s, p) => s + (Number(p.amount) < 0 ? -Number(p.amount) : 0), 0);
   if (!filtered && S.waseetOwedAll) { totalOwed = S.waseetOwedAll.sum; unpaidCount = S.waseetOwedAll.n; }
   /* the $1 per order is owed by Waseet too */
   let profit = 0;
   for (const orders of waseetOrders().days.values()) profit += orders.size * WASEET_PROFIT_PER_ORDER;
-  const gross = totalOwed + shipOwed + profit;
+  const owedOrders = totalOwed + shipOwed;
+  const gross = owedOrders + profit + added;
   const net = +(gross - paidIn).toFixed(2);
   tiles.append(
     filtered
-      ? tile("Collect from Waseet", money(gross - profit),
+      ? tile("Collect from Waseet", money(owedOrders),
           "this filter only · before payments", "var(--danger)")
       : tile(net < 0 ? "Waseet credit" : "Collect from Waseet", money(Math.abs(net)),
-          money(gross - profit) + " owed" + (profit ? " + " + money(profit) + " profit" : "") +
+          money(owedOrders) + " owed" + (profit ? " + " + money(profit) + " profit" : "") +
+          (added ? " + " + money(added) + " added" : "") +
           " − " + money(paidIn) + " paid", net < 0 ? "var(--ok)" : "var(--danger)"),
     tile("Paid by Waseet", money(paidIn),
-      nf0.format((S.waseetPays || []).length) + " payments", "var(--ok)"),
+      nf0.format(realPays.length) + " payments", "var(--ok)"),
     tile("Already paid direct", money(totalPaid + shipPaidAmt), "client paid — not with Waseet", "var(--ok)"),
     tile("Total Orders", nf0.format(orderIds.size), "unique clients + shipments"),
     tile("Total with Waseet", nf0.format(rows.length + wShips.length),
@@ -6765,7 +6771,10 @@ function waseetPaySection() {
   hd.append(ttl);
   const add = el("button", "btn pri sm", "+ Add payment");
   add.onclick = () => askWaseetPayment();
-  hd.append(add);
+  const plus = el("button", "btn sm", "+ Add to balance");
+  plus.title = "Add an amount Waseet owes you, without any order";
+  plus.onclick = () => askWaseetPayment(null, true);
+  hd.append(add, plus);
   box.append(hd);
   if (!pays.length) {
     box.append(el("div", "li-s", "No payments recorded yet. Add one when Waseet pays you cash."));
@@ -6776,14 +6785,15 @@ function waseetPaySection() {
   for (const p of shown) {
     const li = el("div", "li");
     const m = el("div", "li-m");
+    const isAdd = Number(p.amount) < 0;
     const nm = el("div", "li-nm");
-    nm.append(el("span", null, fmtDate(p.paid_on)));
+    nm.append(el("span", null, fmtDate(p.paid_on) + (isAdd ? " · added to balance" : "")));
     m.append(nm);
     if (p.note) m.append(el("div", "li-s", p.note));
     li.append(m);
     const a = el("div", "li-a");
-    const amt = el("span", "mono num", "− " + money(p.amount));
-    amt.style.fontWeight = "700"; amt.style.color = "var(--ok)";
+    const amt = el("span", "mono num", (isAdd ? "+ " : "− ") + money(Math.abs(Number(p.amount))));
+    amt.style.fontWeight = "700"; amt.style.color = isAdd ? "var(--danger)" : "var(--ok)";
     a.append(amt);
     const ed = el("button", "btn sm", "Edit");
     ed.style.fontSize = "11px";
@@ -6802,12 +6812,17 @@ function waseetPaySection() {
   return box;
 }
 
-function askWaseetPayment(p) {
+function askWaseetPayment(p, addMode) {
   const editing = !!p;
+  /* An addition is stored as a negative amount; the form always shows it positive. */
+  const isAdd = editing ? Number(p.amount) < 0 : !!addMode;
   const scrim = el("div", "scrim");
   const m = el("form", "modal");
-  m.append(el("h3", null, editing ? "Edit Waseet payment" : "Payment from Waseet"));
-  const sub = el("p", "sub", "The amount is deducted from what Waseet owes you. Parcels and shipments stay as they are.");
+  m.append(el("h3", null, isAdd ? (editing ? "Edit amount added" : "Add to Waseet balance")
+                                : (editing ? "Edit Waseet payment" : "Payment from Waseet")));
+  const sub = el("p", "sub", isAdd
+    ? "The amount is added to what Waseet owes you, without any order. Parcels and shipments stay as they are."
+    : "The amount is deducted from what Waseet owes you. Parcels and shipments stay as they are.");
   sub.style.margin = "4px 0 16px";
   m.append(sub);
   const err = el("div");
@@ -6818,12 +6833,12 @@ function askWaseetPayment(p) {
   const amt = el("input", "inp");
   amt.type = "number"; amt.step = "0.01"; amt.min = "0.01"; amt.required = true;
   amt.inputMode = "decimal";
-  if (editing) amt.value = Number(p.amount);
+  if (editing) amt.value = Math.abs(Number(p.amount));
   fA.append(amt);
   m.append(fA);
 
   const fD = el("label", "field");
-  fD.append(el("span", null, "Date paid"));
+  fD.append(el("span", null, isAdd ? "Date" : "Date paid"));
   const dt = el("input", "inp");
   dt.type = "date"; dt.required = true;
   dt.value = editing ? p.paid_on : new Date().toISOString().slice(0, 10);
@@ -6833,14 +6848,14 @@ function askWaseetPayment(p) {
   const fN = el("label", "field");
   fN.append(el("span", null, "Note (optional)"));
   const note = el("input", "inp");
-  note.placeholder = "e.g. cash, who brought it";
+  note.placeholder = isAdd ? "e.g. what it is for" : "e.g. cash, who brought it";
   if (editing && p.note) note.value = p.note;
   fN.append(note);
   m.append(fN);
 
   const acts = el("div", "row");
   acts.style.flexWrap = "wrap";
-  const go = el("button", "btn pri", editing ? "Save" : "Add payment");
+  const go = el("button", "btn pri", editing ? "Save" : isAdd ? "Add to balance" : "Add payment");
   go.type = "submit";
   const no = el("button", "btn", "Cancel");
   no.type = "button";
@@ -6856,7 +6871,7 @@ function askWaseetPayment(p) {
       const { error } = await S.sb.from("waseet_payments").delete().eq("id", p.id);
       if (error) { err.replaceChildren(banner("bad", "Could not delete it", error.message)); del.disabled = false; return; }
       scrim.remove();
-      toast("Payment deleted", "ok");
+      toast(isAdd ? "Amount removed from the balance" : "Payment deleted", "ok");
       loadWaseet();
     };
     acts.append(del);
@@ -6867,16 +6882,16 @@ function askWaseetPayment(p) {
     ev.preventDefault();
     const a = Math.round(Number(amt.value) * 100) / 100;
     if (!(a > 0)) { err.replaceChildren(banner("bad", "Enter an amount above zero", "")); return; }
-    if (!dt.value) { err.replaceChildren(banner("bad", "Pick the date it was paid", "")); return; }
+    if (!dt.value) { err.replaceChildren(banner("bad", isAdd ? "Pick a date" : "Pick the date it was paid", "")); return; }
     go.disabled = true;
-    const row = { amount: a, paid_on: dt.value, note: note.value.trim() || null };
+    const row = { amount: isAdd ? -a : a, paid_on: dt.value, note: note.value.trim() || null };
     const q = editing
       ? S.sb.from("waseet_payments").update(row).eq("id", p.id)
       : S.sb.from("waseet_payments").insert(row);
     const { error } = await q;
     if (error) { err.replaceChildren(banner("bad", "Could not save it", error.message)); go.disabled = false; return; }
     scrim.remove();
-    toast((editing ? "Payment saved · " : "Payment added · ") + money(a), "ok");
+    toast((isAdd ? (editing ? "Saved · " : "Added to the balance · ") : (editing ? "Payment saved · " : "Payment added · ")) + money(a), "ok");
     loadWaseet();
   });
 
