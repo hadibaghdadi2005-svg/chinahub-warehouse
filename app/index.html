@@ -15,11 +15,20 @@
 <meta name="apple-mobile-web-app-title" content="ChinaHub">
 <meta name="format-detection" content="telephone=no">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js"></script>
+<!-- Only the label screens draw barcodes, so this must not hold up the page. -->
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js"></script>
 <link rel="stylesheet" href="styles.css">
+<style>
+/* Shown the moment the page opens, until the app draws over it. */
+#boot-splash{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;background:#f6f7fb;color:#1f2d6e;font:600 15px/1.4 system-ui,sans-serif}
+#boot-splash img{width:72px;height:72px;border-radius:18px}
+#boot-splash i{width:28px;height:28px;border:3px solid #d6dbef;border-top-color:#1f2d6e;border-radius:50%;animation:bs .8s linear infinite}
+@keyframes bs{to{transform:rotate(360deg)}}
+@media (prefers-color-scheme:dark){#boot-splash{background:#10142a;color:#dfe4ff}#boot-splash i{border-color:#2a3157;border-top-color:#dfe4ff}}
+</style>
 </head>
 <body>
-<div id="app"></div>
+<div id="app"><div id="boot-splash"><img src="icon-192.png" alt=""><i></i><span>Opening the warehouse…</span></div></div>
 <div class="toasts" id="toasts" aria-live="polite"></div>
 
 <script type="module" src="app.js"></script>
@@ -35,7 +44,8 @@
   }, true);
   setTimeout(function () {
     var app = document.getElementById("app");
-    if (!app || app.children.length) return;
+    if (!app || (app.children.length && !document.getElementById("boot-splash"))) return;
+    app.replaceChildren ? app.replaceChildren() : (app.innerHTML = "");
     var ua = navigator.userAgent;
     var m = ua.match(/Chrom(?:e|ium)\/(\d+)/);
     var chrome = m ? parseInt(m[1], 10) : 0;

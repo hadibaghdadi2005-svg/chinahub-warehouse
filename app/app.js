@@ -9038,10 +9038,29 @@ async function loadMe() {
     if (attempt) await new Promise(r => setTimeout(r, 700 * attempt));
     const { data, error } = await S.sb.from("profiles")
       .select("id,name,role,active,username").eq("id", uid).maybeSingle();
-    if (!error && data) { S.me = data.active ? data : null; return; }
-    if (!error && !data && attempt >= 1) { S.me = null; return; }
+    if (!error && data) { S.me = data.active ? data : null; saveMe(uid); return; }
+    if (!error && !data && attempt >= 1) { S.me = null; saveMe(uid); return; }
   }
   S.me = null;
+}
+
+/* The profile from the last time this phone opened the app. Reading it back
+   lets the app draw at once instead of showing a blank page while the profile
+   is fetched; the fresh copy replaces it a moment later. It only ever decides
+   which screens to draw — every record still comes from the database, which
+   checks the account itself. */
+const ME_KEY = "wh-me";
+function saveMe(uid) {
+  try {
+    if (S.me) localStorage.setItem(ME_KEY, JSON.stringify({ uid, me: S.me }));
+    else localStorage.removeItem(ME_KEY);
+  } catch (_) {}
+}
+function savedMe(uid) {
+  try {
+    const v = JSON.parse(localStorage.getItem(ME_KEY) || "null");
+    return v && v.uid === uid && v.me && v.me.active ? v.me : null;
+  } catch (_) { return null; }
 }
 
 async function boot() {
@@ -9049,26 +9068,48 @@ async function boot() {
     auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
   });
 
-  loadBuiltAt();
   const { data } = await S.sb.auth.getSession();
   S.session = data.session || null;
-  if (S.session) await loadMe();
-  if (isCallCenter()) S.tab = "stock";
-  else if (sees_money() && S.tab === "scan") S.tab = "home";
-  /* A tapped notification opens the app on its section (…/?tab=hamra). */
+  const uid = S.session?.user?.id;
+  /* Draw straight away with the profile saved last time, and check it in the
+     background. Only a phone that has never opened the app (or was signed
+     out) waits for the profile before drawing. */
+  const saved = uid ? savedMe(uid) : null;
   const wantTab = new URLSearchParams(location.search).get("tab");
-  if (wantTab && S.me && visibleTabs().some(t => t.id === wantTab)) {
-    S.tab = wantTab;
-    history.replaceState(null, "", location.pathname);
+  const start = () => {
+    if (isCallCenter()) S.tab = "stock";
+    else if (sees_money() && S.tab === "scan") S.tab = "home";
+    /* A tapped notification opens the app on its section (…/?tab=hamra). */
+    if (wantTab && S.me && visibleTabs().some(t => t.id === wantTab)) {
+      S.tab = wantTab;
+      history.replaceState(null, "", location.pathname);
+    }
+    render();
+    if (S.me) {
+      loadBrand(); loadZones();
+      if (isCallCenter()) loadCallCenterStock(); else loadStats();
+      if (sees_money()) loadHamra(true);
+      if (S.tab === "hamra") refreshPushState();
+    }
+    if (isAdmin()) loadStaff();
+  };
+  if (saved) {
+    S.me = saved;
+    start();
+    const was = JSON.stringify(saved);
+    loadMe().then(() => {
+      /* Deactivated, or the role changed since last time: draw it again. */
+      if (JSON.stringify(S.me) === was) return;
+      if (!S.me) { render(); return; }
+      S.tab = isCallCenter() ? "stock" : S.tab;
+      render();
+      if (isAdmin() && !(S.staff || []).length) loadStaff();
+    });
+  } else {
+    if (S.session) await loadMe();
+    start();
   }
-  render();
-  if (S.me) {
-    loadBrand(); loadZones();
-    if (isCallCenter()) loadCallCenterStock(); else loadStats();
-    if (sees_money()) loadHamra(true);
-    if (S.tab === "hamra") refreshPushState();
-  }
-  if (isAdmin()) loadStaff();
+  loadBuiltAt();
   /* Keep the Hamra count fresh while the app is open. */
   setInterval(() => {
     if (S.me && sees_money() && !document.hidden) loadHamra(true);
@@ -9100,6 +9141,7 @@ async function onAuth(evt, session) {
       S.sale = null; S.saleBusy = false; S.saleQ = ""; S.saleCat = ""; S.saleView = "stock";
       S.bulk = null; S.home = null; S.soData = null; S.soQ = ""; S.soStatus = ""; S.soPay = ""; S.soMonth = ""; S.soPage = 0;
       if (S.session) await loadMe();
+      else try { localStorage.removeItem(ME_KEY); } catch (_) {}
       if (isCallCenter()) S.tab = "stock";
       else if (sees_money() && S.tab === "scan") S.tab = "home";
       render();

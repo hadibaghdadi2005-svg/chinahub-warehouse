@@ -24,6 +24,28 @@ const SHELL = [
   "./icon-maskable-512.png",
 ];
 const VENDOR = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm";
+/* Addresses that name an exact version, so what they return never changes:
+   supabase-js and the parts it loads, the barcode library, and the fonts. */
+const IMMUTABLE = /^https:\/\/(cdn\.jsdelivr\.net\/npm\/@supabase\/[^/]+@\d[^/]*\/|cdnjs\.cloudflare\.com\/ajax\/libs\/[^/]+\/\d|fonts\.(googleapis|gstatic)\.com\/)/;
+/* How long to wait for the network before using the saved copy. */
+const WAIT_MS = 2500;
+
+/* The network's answer if it comes within WAIT_MS, otherwise the saved copy.
+   Either way a good network answer is saved for next time. `cache: "reload"`
+   goes past the browser's own HTTP cache: without it, GitHub Pages' ten-minute
+   max-age can serve yesterday's app to someone just told a fix is live. */
+async function freshOrSaved(req, key) {
+  const c = await caches.open(VERSION);
+  const net = fetch(req, { cache: "reload" }).then(res => {
+    if (!res || !res.ok) return null;
+    c.put(key, res.clone()).catch(() => {});
+    return res;
+  }).catch(() => null);
+  const saved = await c.match(key);
+  if (!saved) return net;
+  const late = new Promise(r => setTimeout(() => r(null), WAIT_MS));
+  return (await Promise.race([net, late])) || saved;
+}
 
 self.addEventListener("install", e => {
   e.waitUntil((async () => {
@@ -50,48 +72,35 @@ self.addEventListener("fetch", e => {
   const sameOrigin = url.origin === self.location.origin;
 
   /* Supabase and anything else off-origin goes straight out, untouched and
-     uncached. The one exception is the pinned module, which cannot change
-     under a version-locked URL. */
+     uncached — except libraries and fonts whose address carries a fixed
+     version. Those bytes can never change, so they are kept on the phone and
+     never fetched twice. */
   if (!sameOrigin) {
-    if (req.url === VENDOR)
-      e.respondWith(caches.match(req).then(hit => hit || fetch(req)));
+    if (IMMUTABLE.test(req.url))
+      e.respondWith((async () => {
+        const hit = await caches.match(req);
+        if (hit) return hit;
+        const res = await fetch(req);
+        if (res && (res.ok || res.type === "opaque"))
+          (await caches.open(VERSION)).put(req, res.clone()).catch(() => {});
+        return res;
+      })());
     return;
   }
 
-  /* The app's code and styles come fresh from the network every time, so a
-     new page never runs with yesterday's code; the stored copy is only for
-     when there is no connection. */
+  /* The app's code, styles and page come from the network, so a deploy is
+     picked up — but only for as long as the network answers quickly. On slow
+     warehouse wifi or mobile data, the copy saved last time is used after a
+     short wait instead of leaving a blank screen, and the download carries on
+     in the background so the next opening has the new copy. */
   if (/\/(app\.js|styles\.css)$/.test(url.pathname)) {
-    e.respondWith((async () => {
-      try {
-        const fresh = await fetch(req, { cache: "reload" });
-        if (fresh && fresh.ok) (await caches.open(VERSION)).put(req, fresh.clone());
-        return fresh;
-      } catch (_) {
-        return (await caches.match(req)) || new Response("", { status: 504 });
-      }
-    })());
+    e.respondWith(freshOrSaved(req, req).then(r => r || new Response("", { status: 504 })));
     return;
   }
-
-  /* A navigation gets the network first so a deploy is picked up, and the
-     cached shell when there is nothing to reach. */
   if (req.mode === "navigate") {
-    e.respondWith((async () => {
-      try {
-        /* `cache: "reload"` goes past the browser's own HTTP cache. Without
-           it, GitHub Pages' ten-minute max-age can serve yesterday's app to
-           someone who has just been told the fix is live. */
-        const fresh = await fetch(req, { cache: "reload" });
-        const c = await caches.open(VERSION);
-        c.put("./index.html", fresh.clone());
-        return fresh;
-      } catch (_) {
-        return (await caches.match("./index.html")) ||
-               new Response("Offline, and the app is not cached yet.",
-                 { status: 503, headers: { "content-type": "text/plain" } });
-      }
-    })());
+    e.respondWith(freshOrSaved(req, "./index.html").then(r => r ||
+      new Response("Offline, and the app is not cached yet.",
+        { status: 503, headers: { "content-type": "text/plain" } })));
     return;
   }
 
